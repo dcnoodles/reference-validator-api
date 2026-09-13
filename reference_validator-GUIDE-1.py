@@ -75,8 +75,21 @@ TITLE_CHAR_THRESHOLD = 0.82   # character-level similarity
 TITLE_WORD_THRESHOLD = 0.60   # word-level Jaccard (catches completely different topics)
 TITLE_LEN_RATIO      = 0.85   # cited title must be ≥85% as long as found title (catches truncation)
 TITLE_WORD_RECALL    = 0.85   # ≥85% of found's keywords must appear (fuzzily) in cited
-AUTHOR_THRESHOLD     = 0.75
 # ── Rec 5: Removed MAX_REFERENCES = 10. No artificial cap on reference count.
+# ── Bug fix: author matching used to compare the whole "Surname, I." string
+# against a single AUTHOR_THRESHOLD (0.75), which was far too lenient for
+# short surnames — a single character substitution/insertion/deletion in a
+# typical 5-9 letter surname (e.g. "Xaswani" vs "Vaswani") still scores
+# 0.86-0.93 under SequenceMatcher. Worse, comparing the combined string also
+# conflated two very different situations that score in the SAME range: a
+# legitimate initials-completeness difference (cited "Smith, J. A." vs found
+# "Smith, J.") scores ~0.857, while an actual surname typo scores ~0.857-
+# 0.933 too — no single threshold on the combined string can separate them.
+# Replaced with author_name_similarity() below, which compares surname and
+# initials separately: SURNAME_THRESHOLD applies only to the surname (where
+# a true match is always exactly 1.0 once initials aren't mixed in, giving a
+# clean gap above the 0.857-0.933 typo band), and initials are compared as a
+# prefix relationship instead of raw similarity.
 
 # ── New Rec E: Neural cross-encoder configuration ─────────────────────────────
 # CROSS_ENCODER_SIM_MODEL scores semantic similarity between a cited title and
@@ -85,10 +98,22 @@ AUTHOR_THRESHOLD     = 0.75
 # CROSS_ENCODER_NLI_MODEL performs the Recognizing Textual Entailment (RTE)
 # classification described in the study: does the cited source's abstract
 # (premise) support the sentence in which it is cited (hypothesis)?
-# Both are small/CPU-friendly MiniLM-based cross-encoders — no GPU required.
-CROSS_ENCODER_SIM_MODEL   = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+#
+# Bug fix: CROSS_ENCODER_SIM_MODEL was originally ms-marco-MiniLM-L-6-v2, a
+# *query-passage relevance* model (trained so a short query scores highly
+# against any longer passage it's relevant to). That is exactly the wrong
+# inductive bias here — verified directly that it rated the single word
+# "Attention" as 99.76% "similar" to the full title "Attention is all you
+# need", which meant a title truncated down to one word still passed as a
+# match. Swapped to an actual semantic-*equivalence* (STS) model, which
+# correctly separates "is a fragment of" from "means the same as": the same
+# truncation scores only ~73% with this model, and two genuinely different
+# papers on a similar topic score under 30%, while a true same-content
+# paraphrase scores ~75%. STS cross-encoders output an already-normalized
+# [0,1] score directly (no extra sigmoid needed — see neural_similarity()).
+CROSS_ENCODER_SIM_MODEL   = "cross-encoder/stsb-distilroberta-base"
 CROSS_ENCODER_NLI_MODEL   = "cross-encoder/nli-MiniLM2-L6-H768"
-NEURAL_OVERRIDE_THRESHOLD = 0.90   # neural score needed to rescue a failed title match
+NEURAL_OVERRIDE_THRESHOLD = 0.75   # neural score needed to rescue a failed title match
 SEMANTIC_SCHOLAR_API        = "https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}"
 SEMANTIC_SCHOLAR_SEARCH_API = "https://api.semanticscholar.org/graph/v1/paper/search"
 ARXIV_API = "http://export.arxiv.org/api/query"
@@ -350,6 +375,13 @@ def neural_similarity(text_a: str, text_b: str) -> Optional[float]:
     Unlike SequenceMatcher/Jaccard, the cross-encoder reads both texts
     together and can recognize paraphrases with little surface overlap.
     Returns None if the neural stack is unavailable.
+
+    CROSS_ENCODER_SIM_MODEL is an STS (semantic textual similarity) model,
+    trained with a sigmoid output head so predict() already returns a score
+    in [0, 1] directly — applying _sigmoid() again here would distort it
+    (e.g. squashing an already-high 0.98 down to ~0.73). That double-sigmoid
+    bug existed under the previous ms-marco relevance model, which returned
+    unbounded raw logits and needed the extra squashing step.
     """
     if not text_a or not text_b:
         return None
@@ -357,8 +389,8 @@ def neural_similarity(text_a: str, text_b: str) -> Optional[float]:
     if model is None:
         return None
     try:
-        raw = model.predict([(text_a, text_b)])[0]
-        return round(_sigmoid(float(raw)), 4)
+        raw = float(model.predict([(text_a, text_b)])[0])
+        return round(max(0.0, min(1.0, raw)), 4)
     except Exception:
         return None
 
@@ -513,12 +545,34 @@ def title_similarity(cited: str, found: str) -> tuple[float, bool, dict]:
     # score rescues that case. The numeric-token guard still applies: a
     # changed digit is a stronger tampering signal than semantic similarity
     # can override.
+    #
+    # Bug fix: a truncated title (e.g. cited "Attention is all you" against
+    # the real title "Attention is all you need") is a literal prefix/
+    # substring of the full title, not a reworded paraphrase — but even the
+    # STS model above still rates a close truncation as highly "similar"
+    # (fragments of a sentence remain topically near-identical to the whole
+    # sentence). Verified directly: dropping the title to a single word
+    # still scored high enough to incorrectly pass. A neural score alone
+    # can't tell "truncated" from "reworded" apart, but a substring check
+    # can: a genuine paraphrase uses different wording and is essentially
+    # never a literal contiguous substring of the original, while a
+    # truncation always is. So the override is blocked whenever the shorter
+    # title is fully contained in the longer one — that pattern is
+    # truncation, never legitimate paraphrase, regardless of neural score.
+    _is_substring_truncation = (
+        (len_cited < len_found and norm_cited in norm_found) or
+        (len_found < len_cited and norm_found in norm_cited)
+    )
     neural_override = False
-    if not is_match and neural_score is not None and neural_score >= NEURAL_OVERRIDE_THRESHOLD and nums_ok:
+    if (not is_match and neural_score is not None and neural_score >= NEURAL_OVERRIDE_THRESHOLD
+            and nums_ok and not _is_substring_truncation):
         is_match = True
         neural_override = True
     breakdown["neural_override"]           = neural_override
     breakdown["neural_override_threshold"] = NEURAL_OVERRIDE_THRESHOLD
+    breakdown["neural_override_blocked_as_truncation"] = (
+        _is_substring_truncation if neural_score is not None else False
+    )
 
     breakdown["is_match"] = is_match
 
@@ -2423,6 +2477,61 @@ def _author_first_letter_ok(cited: str, found: str) -> bool:
     return bool(c) and bool(f) and c[0].lower() == f[0].lower()
 
 
+# ── Bug fix: surname/initials-separated author comparison ────────────────────
+# AUTHOR_THRESHOLD alone (applied to the whole "Surname, I." string) could not
+# distinguish two very different situations that happen to produce OVERLAPPING
+# similarity scores: a legitimate initials-completeness difference (e.g. cited
+# "Smith, J. A." vs found "Smith, J." — same person, CrossRef just lists fewer
+# initials) scores ~0.857, while an actual misspelled surname (e.g. "Vaswani"
+# vs "Xaswani" or "Vasvani") scores ~0.857-0.933 — the SAME range. No single
+# threshold on the combined string can separate "fewer initials known" from
+# "surname is wrong" when they overlap like that; one was always going to leak
+# through. Splitting the comparison fixes this: once initials aren't part of
+# the compared string, matching surnames always score exactly 1.0 regardless
+# of initials, while surname typos remain in the 0.857-0.933 band — a clean,
+# separable gap that a strict SURNAME_THRESHOLD can sit above.
+SURNAME_THRESHOLD = 0.94
+
+
+def _split_surname_initials(name: str) -> tuple[str, list[str]]:
+    """Splits a 'Surname, I. I.' formatted name into (surname, [initial, ...])."""
+    parts = name.split(",", 1)
+    surname = parts[0].strip()
+    initials = re.findall(r"[A-Za-z]", parts[1]) if len(parts) > 1 else []
+    return surname, initials
+
+
+def author_name_similarity(cited: str, found: str) -> tuple[float, bool]:
+    """
+    Compares two author names by surname and initials separately rather than
+    as one fuzzy string. Returns (surname_similarity, is_match).
+
+    - Surname must clear SURNAME_THRESHOLD — a real misspelling, not just a
+      difference in how many initials are recorded.
+    - Initials are compared as a prefix relationship: one side is allowed to
+      simply have fewer known initials than the other (a common, legitimate
+      metadata-completeness difference), but whichever initials ARE present
+      on both sides must agree — so "J." vs "J. A." passes, but "J." vs "B."
+      does not.
+    """
+    surname_c, initials_c = _split_surname_initials(cited)
+    surname_f, initials_f = _split_surname_initials(found)
+
+    surname_sim = char_similarity(surname_c, surname_f)
+    surname_ok  = surname_sim >= SURNAME_THRESHOLD
+
+    if not initials_c or not initials_f:
+        initials_ok = True
+    else:
+        shorter, longer = (
+            (initials_c, initials_f) if len(initials_c) <= len(initials_f)
+            else (initials_f, initials_c)
+        )
+        initials_ok = [i.upper() for i in longer[:len(shorter)]] == [i.upper() for i in shorter]
+
+    return surname_sim, (surname_ok and initials_ok)
+
+
 # ── Core validator ────────────────────────────────────────────────────────────
 def validate_reference(ref: ParsedReference) -> ValidationResult:
     result = ValidationResult(reference=ref)
@@ -2607,23 +2716,29 @@ def validate_reference(ref: ParsedReference) -> ValidationResult:
             matched = []
             author_details = []   # Rec 4: per-author similarity details
             for cited in ref.authors:
-                # Find the best-matching found author
+                # Find the best-matching found author. A candidate that
+                # fully matches (surname + initials both agree) is always
+                # preferred over one that merely scores higher on raw
+                # surname similarity but fails the initials check.
                 best_score = 0.0
                 best_name  = ""
+                best_passed = False
                 for fa in found_authors:
                     if _author_first_letter_ok(cited, fa):
-                        sim = char_similarity(cited, fa)
-                        if sim > best_score:
-                            best_score = sim
-                            best_name  = fa
-                best_passed = best_score >= AUTHOR_THRESHOLD
+                        sim, name_ok = author_name_similarity(cited, fa)
+                        is_better = (name_ok and not best_passed) or \
+                                    (name_ok == best_passed and sim > best_score)
+                        if is_better:
+                            best_score  = sim
+                            best_name   = fa
+                            best_passed = name_ok
                 matched.append(best_passed)
                 author_details.append({
                     "cited":                  cited,
                     "best_match":             best_name,
                     "similarity":             round(best_score, 4),
                     "levenshtein_similarity":  round(levenshtein_similarity(cited, best_name), 4) if best_name else 0.0,
-                    "threshold":              AUTHOR_THRESHOLD,
+                    "threshold":              SURNAME_THRESHOLD,
                     "passed":                 best_passed,
                 })
 
@@ -2654,7 +2769,7 @@ def validate_reference(ref: ParsedReference) -> ValidationResult:
                 "has_et_al":     has_etal,
                 "all_matched":   all(matched),
                 "final_match":   result.authors_match,
-                "method":        "char_similarity (SequenceMatcher) per author, first-letter guard",
+                "method":        "surname/initials-separated comparison (strict surname match + prefix-compatible initials), first-letter guard",
             }
 
             if not result.authors_match:
@@ -2673,8 +2788,7 @@ def validate_reference(ref: ParsedReference) -> ValidationResult:
                     # Find which found authors are completely absent from the cited list
                     missing = [
                         fa for fa in found_authors
-                        if not any(char_similarity(fa, c) >= AUTHOR_THRESHOLD
-                                   for c in ref.authors)
+                        if not any(author_name_similarity(c, fa)[1] for c in ref.authors)
                     ]
                     err_parts.append(
                         f"Author count mismatch: reference lists "
