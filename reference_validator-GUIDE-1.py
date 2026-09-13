@@ -1957,6 +1957,22 @@ def crossref_authors(data: dict) -> list[str]:
     for a in data.get("author", []):
         family = a.get("family", "")
         given  = a.get("given", "")
+        # ── Bug fix: CrossRef sometimes stores a stray middle initial glued
+        # onto the front of the family name with no space, e.g.
+        # {"given": "Aidan", "family": "N.Gomez"} for "Aidan N. Gomez".
+        # Verified directly against CrossRef's live API (search "Attention
+        # is all you need") — the "Gomez" author entry is stored exactly
+        # this way, which previously made a correctly cited "Gomez, A. N."
+        # get reported as "not found" (compared against "N.Gomez, A."
+        # instead of "Gomez, A. N."). A single capital letter + period
+        # immediately followed by another capitalized word is not a
+        # plausible real family name, so it's treated as a misplaced
+        # initial and moved back onto the given-name side before initials
+        # are built.
+        _stray_initial_m = re.match(r'^([A-Z])\.([A-Z][a-z].*)$', family)
+        if _stray_initial_m:
+            given  = f"{given} {_stray_initial_m.group(1)}.".strip()
+            family = _stray_initial_m.group(2)
         if family:
             initials = " ".join(f"{p[0]}." for p in given.split() if p) if given else ""
             authors.append(f"{family}, {initials}".strip(", "))
@@ -2746,11 +2762,44 @@ def validate_reference(ref: ParsedReference) -> ValidationResult:
                         result.date_match = True
                     else:
                         result.date_match = False
-                        result.errors.append(
-                            f"Year mismatch.\n"
-                            f"    Cited : {ref.year.strip()}\n"
-                            f"    Found : {found_year.strip()}"
-                        )
+                        # ── Bug fix: title-search fallback can return a
+                        # duplicate/mirror record with a wrong year ────────
+                        # When there's no DOI, metadata comes from a
+                        # bibliographic title search rather than an
+                        # authoritative direct DOI lookup. CrossRef is known
+                        # to carry multiple duplicate "posted-content"
+                        # registrations of the same paper (mirrors/reprints
+                        # registered later than the original), all sharing
+                        # the same incorrect year. Verified directly against
+                        # CrossRef's API: searching "Attention is all you
+                        # need" returns 7 identical title/author records, all
+                        # dated 2025, none carrying the real 2017 date — so
+                        # there is no better candidate to fall back to; the
+                        # fallback source itself is simply unauthoritative
+                        # here. A cited year at or before the found year is
+                        # consistent with citing the original and the search
+                        # surfacing a later duplicate, so that combination is
+                        # downgraded to a warning instead of a hard error.
+                        # A cited year AFTER the found year is the opposite,
+                        # more suspicious pattern (citing something as newer
+                        # than any record found) and still reported as an
+                        # error.
+                        _is_unauthoritative_source = (source == "CrossRef (title search)")
+                        _cited_before_or_at_found = int(extracted_cited) <= int(extracted_found)
+                        if _is_unauthoritative_source and _cited_before_or_at_found:
+                            result.warnings.append(
+                                f"Year could not be reliably confirmed — {source} is a lower-confidence "
+                                f"fallback (used because no DOI was found), and returned a duplicate/mirror "
+                                f"record dated differently from the citation.\n"
+                                f"    Cited : {ref.year.strip()}\n"
+                                f"    Found : {found_year.strip()} (via {source})"
+                            )
+                        else:
+                            result.errors.append(
+                                f"Year mismatch.\n"
+                                f"    Cited : {ref.year.strip()}\n"
+                                f"    Found : {found_year.strip()}"
+                            )
                 
         elif ref.year and not found_year:
             result.warnings.append(f"Publication year not found in {source}.")
