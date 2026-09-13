@@ -1,0 +1,10 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+sentence-transformers
+flask
+flask-cors
+pypdf
+requests
+beautifulsoup4
+colorama
+lxml
