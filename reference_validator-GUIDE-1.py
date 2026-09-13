@@ -720,9 +720,14 @@ def is_valid_apa7(ref: str) -> tuple[bool, str]:
         return False, "Reference must begin with an author surname (capitalize first letter)."
 
     # ── Repeated-punctuation guard ────────────────────────────────────────────
-    # Strip known multi-dot abbreviations (e.g. "n.d.", "et al.") before testing
-    # so they don't trigger the double-period check.
+    # Strip known multi-dot abbreviations (e.g. "n.d.", "et al.") and APA 7's
+    # own ellipsis convention for truncating a 20+ author list (e.g. "Li, M.,
+    # ... & Bendersky, M.") before testing so neither trips the double-period
+    # check. Bug fix: verified on a real reference list that a legitimate
+    # ellipsis-truncated author list was rejected as "repeated periods"
+    # before this was added.
     _punc_test = re.sub(r'\b(?:et\s+al|n\.d)\b\.', 'X', ref, flags=re.IGNORECASE)
+    _punc_test = re.sub(r'\s*\.\.\.\s*', ' X ', _punc_test)
     if re.search(r',{2,}', _punc_test):
         return False, (
             "Repeated commas detected in the author block (e.g. 'Smith, J. A.,,,, Jones'). "
@@ -1012,9 +1017,13 @@ def parse_mla_reference(raw: str) -> ParsedReference:
 
     # ── Fix: Repeated-punctuation guard ──────────────────────────────────────
     # Bug: ",," / ".." / ";;" were silently accepted.
+    # Bug fix: also tolerate the standard ellipsis convention for a
+    # truncated 20+ author list (e.g. "... & Bendersky, M."), which
+    # otherwise reads as three repeated periods.
     _punc_check = re.sub(
         r'\b(?:et\s+al|e\.g|i\.e|n\.d)\b\.', 'X', raw, flags=re.IGNORECASE
     )
+    _punc_check = re.sub(r'\s*\.\.\.\s*', ' X ', _punc_check)
     if re.search(r'\.{2,}|,{2,}|;{2,}', _punc_check):
         ref.parse_error = (
             "Repeated punctuation detected (e.g. '..' or ','','). "
@@ -1285,9 +1294,12 @@ def parse_chicago_reference(raw: str) -> ParsedReference:
 
     # ── Rec 2 Fix 1: Repeated-punctuation guard ──────────────────────────
     # APA 7 and MLA 9 both have this guard; Chicago was missing it.
+    # Bug fix: also tolerate the ellipsis convention for a truncated
+    # 20+ author list, which otherwise reads as three repeated periods.
     _punc_check_ch = re.sub(
         r'\b(?:et\s+al|e\.g|i\.e|n\.d)\b\.', 'X', raw, flags=re.IGNORECASE
     )
+    _punc_check_ch = re.sub(r'\s*\.\.\.\s*', ' X ', _punc_check_ch)
     if re.search(r'\.{2,}|,{2,}|;{2,}', _punc_check_ch):
         ref.parse_error = (
             "Repeated punctuation detected (e.g. '..' or ','','). "
@@ -1536,9 +1548,12 @@ def parse_ieee_reference(raw: str) -> ParsedReference:
             return ref
 
     # ── Repeated-punctuation guard ────────────────────────────────────────
+    # Bug fix: also tolerate the ellipsis convention for a truncated
+    # long author list, which otherwise reads as three repeated periods.
     _punc_check = re.sub(
         r'\b(?:et\s+al|e\.g|i\.e|n\.d)\b\.', 'X', raw, flags=re.IGNORECASE
     )
+    _punc_check = re.sub(r'\s*\.\.\.\s*', ' X ', _punc_check)
     if re.search(r'\.{2,}|,{2,}|;{2,}', _punc_check):
         ref.parse_error = (
             "Repeated punctuation detected (e.g. '..' or ','','). "
@@ -3716,6 +3731,82 @@ def analyze_thesis_integrity(full_text: str, fmt: str = FORMAT_APA7) -> dict:
     return report
 
 
+def _is_fragmented_pdf_text(text: str) -> bool:
+    """
+    Detects PDFs that extracted with one word per line — each real word
+    isolated on its own line, the next word separated by a line holding
+    just a single space (observed directly from a real thesis export).
+    True when most non-empty lines hold only a single token.
+    """
+    lines = text.split("\n")
+    non_empty = [l for l in lines if l.strip()]
+    if not non_empty:
+        return False
+    single_token_frac = sum(1 for l in non_empty if len(l.strip().split()) <= 1) / len(non_empty)
+    return single_token_frac >= 0.6
+
+
+def _split_fragmented_pdf_references(ref_text: str) -> list[str]:
+    """
+    Reference-splitting strategy for one-word-per-line PDF extractions (see
+    _is_fragmented_pdf_text). There is no reliable line/whitespace signal
+    for reference boundaries in this extraction style — verified directly
+    against a real file: the gap between two consecutive references is a
+    single blank-ish line, IDENTICAL to an ordinary word-to-word gap; only
+    a coincidental page break produces a larger gap, so blank-line-run
+    length can't be used as a boundary signal here.
+
+    Instead, this fully flattens the text into one continuous string and
+    scans for "Surname, Initial." shaped candidate reference starts
+    wherever they occur, applying the same gate the line-based splitter
+    uses for wrapped multi-author lists: a candidate only counts as a new
+    reference if the entry accumulated so far already contains a (YYYY)
+    year. A multi-author list inside ONE reference produces many such
+    candidates before any year appears (e.g. "Agarwal, A., Arafa, M.,
+    Avidor-Reiss, T., ... & Shah, R. (2023)."); a genuine new reference
+    only starts once the previous entry's year — and therefore the whole
+    entry — is already present.
+    """
+    flat = re.sub(r"\s+", " ", ref_text).strip()
+    if not flat:
+        return []
+
+    _RE_IEEE     = re.compile(r"\[\d+\]")
+    _RE_NUMBERED = re.compile(r"(?<=[.\s])\d{1,3}[.)]\s+(?=[A-Z])")
+    _RE_NAME     = re.compile(r"[A-Z][A-Za-z'\-]+,\s+[A-Z]\.")
+
+    # Structural markers are unambiguous regardless of position — prefer
+    # them outright when present.
+    for pattern in (_RE_IEEE, _RE_NUMBERED):
+        starts = [m.start() for m in pattern.finditer(flat)]
+        if len(starts) >= 2:
+            bounds = starts + [len(flat)]
+            return [
+                flat[bounds[i]:bounds[i + 1]].strip()
+                for i in range(len(bounds) - 1)
+                if len(flat[bounds[i]:bounds[i + 1]].strip()) >= 25
+            ]
+
+    candidates = list(_RE_NAME.finditer(flat))
+    if not candidates:
+        return [flat] if len(flat) >= 25 else []
+
+    starts = [candidates[0].start()]
+    entry_start = candidates[0].start()
+    for m in candidates[1:]:
+        segment_so_far = flat[entry_start:m.start()]
+        if re.search(r"\((?:19|20)\d{2}", segment_so_far):
+            starts.append(m.start())
+            entry_start = m.start()
+    starts.append(len(flat))
+
+    return [
+        flat[starts[i]:starts[i + 1]].strip()
+        for i in range(len(starts) - 1)
+        if len(flat[starts[i]:starts[i + 1]].strip()) >= 25
+    ]
+
+
 def split_text_into_references(text: str, fmt: str = "") -> list[str]:
     """
     Extract individual references from PDF-extracted text.
@@ -3757,7 +3848,30 @@ def split_text_into_references(text: str, fmt: str = "") -> list[str]:
         re.MULTILINE
     )
 
-    heading_match = _HEADING_PATTERN.search(text)
+    # ── Bug fix: don't just take the FIRST heading match ────────────────
+    # The word "references" often appears in ordinary body prose well
+    # before the actual bibliography — e.g. a methodology section
+    # describing how the system "detects the References or Bibliography
+    # section" satisfies this exact pattern, especially on PDFs that
+    # extract with one word per line (common from some export tools),
+    # where a genuine newline ends up on both sides of nearly every word.
+    # Taking the first match there swept up the entire rest of the
+    # document into a single "reference." A genuine reference-list heading
+    # is reliably followed closely by multiple "Surname, Initial."-shaped
+    # entries; try candidates from last to first (the real section is
+    # almost always near the end) and take the first one that's actually
+    # followed by that pattern.
+    _REF_START_PROBE = re.compile(r'[A-Z][a-z]+,\s+[A-Z]\.')
+    heading_matches = list(_HEADING_PATTERN.finditer(text))
+    heading_match = None
+    for _candidate in reversed(heading_matches):
+        _following = text[_candidate.end():_candidate.end() + 3000]
+        if len(_REF_START_PROBE.findall(_following)) >= 2:
+            heading_match = _candidate
+            break
+    if heading_match is None and heading_matches:
+        heading_match = heading_matches[-1]
+
     if heading_match:
         ref_text = text[heading_match.end():]
         # Truncate at the next major section heading (if any) that comes
@@ -3785,6 +3899,17 @@ def split_text_into_references(text: str, fmt: str = "") -> list[str]:
     ref_text = ref_text.strip()
     if not ref_text:
         return []
+
+    # ── Bug fix: one-word-per-line PDF extractions need a different
+    # splitting strategy entirely — every line-based heuristic below
+    # assumes a "line" can contain a full pattern like "Surname, Initial.",
+    # which is never true when each word is isolated on its own line (see
+    # _split_fragmented_pdf_references for why a whitespace-based reflow
+    # doesn't work either — verified directly that reference-to-reference
+    # gaps and ordinary word gaps are indistinguishable by blank-line count
+    # in this extraction style).
+    if _is_fragmented_pdf_text(ref_text):
+        return _split_fragmented_pdf_references(ref_text)
 
     # ══════════════════════════════════════════════════════════════════════
     #  STAGE 2: Split into individual references
