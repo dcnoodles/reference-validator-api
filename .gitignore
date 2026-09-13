@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+
+# Desktop app build artifacts — large binaries, not source, rebuild locally
+build/
+dist/
+*.spec
+bundled_models/

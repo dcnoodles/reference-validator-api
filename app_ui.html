@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reference Validator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&family=Karla:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{--bg:#0c0f18;--surface:#111525;--card:#141a2e;--border:#1c2340;--border-md:#252d50;--text:#e4dfd5;--sub:#8491a8;--muted:#47536a;--gold:#c9a84c;--gold-bg:#241c08;--green:#3dbe82;--green-bg:#06231a;--red:#e86060;--red-bg:#230808;--yellow:#e8b84b;--yellow-bg:#241808;--blue:#5ea8e0;--blue-bg:#081525;--purple:#a78bfa;--purple-bg:#1a1030;--cyan:#22d3ee;--cyan-bg:#082530}
+    html{scroll-behavior:smooth}body{background:var(--bg);color:var(--text);font-family:'Karla',system-ui,sans-serif;font-size:14px;line-height:1.6;min-height:100vh}
+    ::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--border-md);border-radius:3px}::selection{background:#c9a84c30}
+    textarea{font-family:'JetBrains Mono',monospace}textarea::placeholder{color:var(--muted)}textarea:focus{outline:none}button{font-family:'Karla',sans-serif;cursor:pointer}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}code{font-family:'JetBrains Mono',monospace;font-size:.9em;background:var(--bg);padding:1px 5px;border-radius:3px;color:var(--sub)}
+    @keyframes spin{to{transform:rotate(360deg)}}@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}@keyframes modalIn{from{opacity:0;transform:scale(.96) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}
+    .fade-up{animation:fadeUp .35s ease both}.spinner{width:22px;height:22px;border-radius:50%;border:2.5px solid var(--border-md);border-top-color:var(--gold);animation:spin .8s linear infinite;flex-shrink:0}
+    .check-row{border-bottom:1px solid var(--border)}.check-row:last-child{border-bottom:none}
+    .tag{font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 7px;border-radius:4px;background:var(--bg);color:var(--muted);border:1px solid var(--border);letter-spacing:.3px}
+    .btn-ghost{background:none;border:1px solid var(--border);border-radius:4px;padding:4px 10px;color:var(--muted);font-size:11px;transition:all .15s}.btn-ghost:hover{border-color:var(--border-md);color:var(--sub)}
+    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(4px);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px}
+    .modal-box{background:var(--surface);border:1px solid var(--border-md);border-radius:12px;max-width:640px;width:100%;max-height:90vh;overflow-y:auto;animation:modalIn .25s ease}
+    .likert-btn{background:var(--bg);border:1.5px solid var(--border);border-radius:8px;width:44px;height:44px;color:var(--sub);font-size:13px;font-weight:600;transition:all .15s;display:flex;align-items:center;justify-content:center}.likert-btn:hover{border-color:var(--border-md);color:var(--text)}.likert-btn.sel{border-color:var(--gold);background:var(--gold-bg);color:var(--gold)}
+    .format-tab{background:none;border:1.5px solid var(--border);border-radius:6px;padding:6px 14px;color:var(--sub);font-size:12px;font-weight:600;transition:all .2s;letter-spacing:.3px}.format-tab:hover{border-color:var(--border-md);color:var(--text)}.format-tab.active{border-color:var(--gold);background:var(--gold-bg);color:var(--gold)}
+    .doi-pill{display:inline-flex;align-items:center;gap:5px;background:var(--blue-bg);border:1px solid #0d2340;border-radius:20px;padding:3px 10px;font-size:11px;color:var(--blue);font-family:'JetBrains Mono',monospace}
+    .upload-zone{border:2px dashed var(--border-md);border-radius:8px;padding:20px;text-align:center;cursor:pointer;transition:all .2s;background:var(--surface)}.upload-zone:hover,.upload-zone.drag-over{border-color:var(--gold);background:var(--gold-bg)}
+    .breakdown-panel{background:var(--bg);border:1px solid var(--border);border-radius:6px;overflow:hidden;margin-top:8px}
+    .breakdown-toggle{width:100%;background:none;border:none;color:var(--sub);padding:8px 14px;font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer;transition:color .15s}.breakdown-toggle:hover{color:var(--text)}
+    .breakdown-body{padding:0 14px 12px;font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--sub)}
+    .score-bar-bg{height:6px;background:var(--border);border-radius:3px;overflow:hidden;flex:1}.score-bar-fill{height:100%;border-radius:3px;transition:width .5s ease}
+    .conf-badge{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.8px;padding:2px 8px;border-radius:3px;text-transform:uppercase}
+    .conf-high{background:var(--green-bg);color:var(--green);border:1px solid #0a3d28}.conf-medium{background:var(--yellow-bg);color:var(--yellow);border:1px solid #352208}.conf-low{background:var(--red-bg);color:var(--red);border:1px solid #381010}.conf-none{background:var(--bg);color:var(--muted);border:1px solid var(--border)}
+    .status-bar{padding:8px 14px;font-size:11px;border-radius:6px;margin-top:8px;font-family:'JetBrains Mono',monospace}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useEffect } = React;
+const BASE = '';   // desktop app: Flask serves this same page, so API calls are same-origin
+
+const FORMATS = {
+  apa7:    { label: 'APA 7',      ph: 'Smith, J. A., & Jones, B. C. (2021). Title. Nature, 598(7881), 45\u201350. https://doi.org/10.1038/...', re: /^[A-Z\u00C0-\u00DC][A-Za-z\u00e0-\u00ff'\-]+,\s+[A-Z]/ },
+  mla:     { label: 'MLA 9',      ph: 'Smith, John. "Title." Journal, vol. 5, no. 3, 2021, pp. 10-25.', re: /^[A-Z][A-Za-z'\-]+,\s+[A-Z]/ },
+  chicago: { label: 'Chicago 17', ph: 'Smith, John. 2021. "Title." Nature 598: 45-50.', re: /^[A-Z][A-Za-z'\-]+,\s+[A-Z]/ },
+  ieee:    { label: 'IEEE',       ph: '[1] A. B. Smith, "Title of article," Journal, vol. 5, no. 3, pp. 45-50, 2021.', re: /^\s*\[?\d*\]?\s*[A-Z]/ },
+};
+// System Validation Survey is administered externally via Google Forms \u2014
+// replace with the real form link before deployment.
+const GOOGLE_FORM_URL = 'https://docs.google.com/forms/d/e/1FAIpQLSc7sRLonSk0_aTzF-L5hbTrlqjxpf6JbReEtZ0z9um_cDJkYw/viewform';
+
+function parseRefs(text,format){const fmt=FORMATS[format]||FORMATS.apa7;const byBlank=text.split(/\n\s*\n/).map(b=>b.replace(/\n/g,' ').replace(/\s+/g,' ').trim()).filter(Boolean);if(byBlank.length>1)return byBlank;const lines=text.split('\n').map(l=>l.trim()),refs=[];let cur=[];for(const line of lines){if(!line)continue;if(fmt.re.test(line)&&cur.length>0&&/[.\w/]$/.test((cur[cur.length-1]||'').trim())){refs.push(cur.join(' ').replace(/\s+/g,' ').trim());cur=[line]}else cur.push(line)}if(cur.length)refs.push(cur.join(' ').replace(/\s+/g,' ').trim());return refs.filter(Boolean)}
+function cardStatus(vr){if(!vr.reference.valid_apa)return'apa';if(vr.errors.length)return'error';if(vr.warnings.length)return'warn';return'pass'}
+const STATUS={pass:{color:'var(--green)',bg:'var(--green-bg)',label:'PASS'},warn:{color:'var(--yellow)',bg:'var(--yellow-bg)',label:'WARNING'},error:{color:'var(--red)',bg:'var(--red-bg)',label:'ISSUES'},apa:{color:'var(--red)',bg:'var(--red-bg)',label:'FMT ERROR'}};
+
+function LoadingStatus({messages,interval=2200}){
+  const[idx,setIdx]=useState(0);
+  useEffect(()=>{
+    setIdx(0);
+    const id=setInterval(()=>setIdx(i=>(i+1)%messages.length),interval);
+    return()=>clearInterval(id);
+  },[messages,interval]);
+  return<span>{messages[idx]}</span>;
+}
+
+function ScoreBar({value,threshold,color}){const pct=Math.round((value||0)*100),thPct=Math.round((threshold||0)*100),ok=value>=threshold,c=ok?(color||'var(--green)'):'var(--red)';return<div style={{display:'flex',alignItems:'center',gap:8,minWidth:0}}><div className="score-bar-bg" style={{position:'relative'}}><div className="score-bar-fill" style={{width:`${pct}%`,background:c}}/><div style={{position:'absolute',left:`${thPct}%`,top:-2,bottom:-2,width:1,background:'var(--gold)',opacity:.7}}/></div><span style={{fontSize:10,color:ok?'var(--green)':'var(--red)',minWidth:34,textAlign:'right'}}>{pct}%</span></div>}
+function ConfBadge({level}){return<span className={`conf-badge conf-${level||'none'}`}>{level||'none'}</span>}
+
+function SimilarityBreakdown({breakdown,metadataSource,verifiedMetadata}){
+  const[open,setOpen]=useState(false);if(!breakdown||!Object.keys(breakdown).length)return null;
+  const{overall,title,authors,year,doi,search_candidates:sc}=breakdown;const vm=verifiedMetadata||{};const cc=vm.cross_checks;
+  return<div className="breakdown-panel"><button className="breakdown-toggle" onClick={()=>setOpen(!open)}><span style={{fontSize:10,transition:'transform .2s',transform:open?'rotate(90deg)':'none'}}>▶</span><span>Similarity Details</span>{overall&&<span style={{marginLeft:'auto',fontFamily:"'JetBrains Mono',monospace",fontSize:11,color:overall.weighted_integrity_score>=.7?'var(--green)':overall.weighted_integrity_score>=.4?'var(--yellow)':'var(--red)'}}>Integrity: {Math.round(overall.weighted_integrity_score*100)}%</span>}{cc&&<span style={{marginLeft:8}}><ConfBadge level={cc.confidence}/></span>}</button>
+  {open&&<div className="breakdown-body">{metadataSource&&<div style={{marginBottom:10,color:'var(--muted)',fontSize:10,textTransform:'uppercase'}}>Source: {metadataSource}</div>}{overall&&<div style={{marginBottom:14,padding:'10px 12px',background:'var(--surface)',borderRadius:6,border:'1px solid var(--border)'}}><div style={{fontSize:10,color:'var(--gold)',fontWeight:600,marginBottom:8,textTransform:'uppercase'}}>Weighted Integrity Score</div><div style={{display:'flex',alignItems:'center',gap:12,marginBottom:8}}><span style={{fontFamily:"'Cormorant Garamond',serif",fontSize:28,fontWeight:700,color:overall.weighted_integrity_score>=.7?'var(--green)':overall.weighted_integrity_score>=.4?'var(--yellow)':'var(--red)'}}>{Math.round(overall.weighted_integrity_score*100)}%</span><div style={{flex:1}}><ScoreBar value={overall.weighted_integrity_score} threshold={.7}/></div></div><div style={{display:'flex',flexWrap:'wrap',gap:'2px 14px',fontSize:10,color:'var(--muted)'}}>{Object.entries(overall.weights||{}).map(([k,w])=><span key={k}>{k}: <span style={{color:overall.components?.[k]?'var(--green)':'var(--red)'}}>{overall.components?.[k]?'✔':'✘'}</span> × {w}</span>)}</div>{overall.provenance_detail&&<div style={{marginTop:4,fontSize:10,color:'var(--muted)'}}>Provenance: {overall.provenance_detail}</div>}</div>}{title&&<div style={{marginBottom:10}}><div style={{fontSize:10,color:'var(--blue)',fontWeight:600,marginBottom:6,textTransform:'uppercase'}}>Title Similarity</div>{title.criteria_results&&<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'4px 12px'}}>{Object.entries(title.criteria_results).map(([k,c])=><div key={k}><span style={{fontSize:10,color:'var(--muted)',textTransform:'capitalize'}}>{k.replace(/_/g,' ')}</span><ScoreBar value={c.value} threshold={c.threshold} color="var(--blue)"/></div>)}</div>}<div style={{fontSize:10,color:'var(--muted)',marginTop:4}}>Regime: {title.regime} · Seq: {Math.round((title.char_similarity||0)*100)}% · Lev: {Math.round((title.levenshtein_similarity||0)*100)}%</div>{title.neural_similarity!=null?<div style={{marginTop:8,padding:'8px 10px',background:'var(--purple-bg)',border:'1px solid #2a1a4a',borderRadius:6,display:'flex',alignItems:'center',gap:8}}><span style={{fontSize:10,color:'var(--purple)',fontWeight:600,textTransform:'uppercase'}}>Cross-Encoder</span><div style={{flex:1}}><ScoreBar value={title.neural_similarity} threshold={title.neural_override_threshold||0.9} color="var(--purple)"/></div>{title.neural_override&&<span className="conf-badge" style={{background:'var(--purple-bg)',color:'var(--purple)',border:'1px solid var(--purple)'}}>rescued match</span>}</div>:<div style={{marginTop:6,fontSize:10,color:'var(--muted)',fontStyle:'italic'}}>Cross-encoder unavailable — string similarity only</div>}</div>}{authors?.per_author&&<div style={{marginBottom:10}}><div style={{fontSize:10,color:'var(--purple)',fontWeight:600,marginBottom:6,textTransform:'uppercase'}}>Author Similarity</div>{authors.per_author.map((a,i)=><div key={i} style={{display:'flex',alignItems:'center',gap:8,padding:'3px 0',borderBottom:'1px solid var(--border)'}}><span style={{color:a.passed?'var(--green)':'var(--red)',width:14}}>{a.passed?'✔':'✘'}</span><span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{a.cited}</span><span style={{color:'var(--muted)',fontSize:10}}>→</span><span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',color:'var(--muted)'}}>{a.best_match||'(none)'}</span><span style={{fontSize:10,color:a.passed?'var(--green)':'var(--red)',minWidth:34,textAlign:'right'}}>{Math.round(a.similarity*100)}%</span></div>)}</div>}{vm&&Object.keys(vm).filter(k=>!k.endsWith('_in_reference')&&!k.endsWith('_overlap')&&k!=='cross_checks').length>0&&<div><div style={{fontSize:10,color:'var(--green)',fontWeight:600,marginBottom:6,textTransform:'uppercase'}}>Verified Metadata</div><div style={{display:'grid',gridTemplateColumns:'auto 1fr',gap:'2px 12px'}}>{Object.entries(vm).filter(([k])=>!k.endsWith('_in_reference')&&!k.endsWith('_overlap')&&k!=='cross_checks').map(([k,v])=><React.Fragment key={k}><span style={{color:'var(--muted)',textTransform:'capitalize'}}>{k}:</span><span style={{color:'var(--sub)',wordBreak:'break-word'}}>{Array.isArray(v)?v.join(', '):String(v)}</span></React.Fragment>)}</div></div>}</div>}</div>}
+
+function CheckRow({label,value,detail}){let icon,color;if(value===true){icon='✔';color='var(--green)'}else if(value===false){icon='✘';color='var(--red)'}else{icon='–';color='var(--muted)'}return<div className="check-row" style={{display:'flex',alignItems:'baseline',gap:10,padding:'6px 0'}}><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,fontWeight:500,color,width:16,flexShrink:0}}>{icon}</span><span style={{color:value!==null?'var(--text)':'var(--sub)',fontSize:13,flex:1}}>{label}</span>{detail&&<span style={{color:'var(--muted)',fontSize:11,fontFamily:"'JetBrains Mono',monospace",whiteSpace:'nowrap',maxWidth:220,overflow:'hidden',textOverflow:'ellipsis'}}>{detail}</span>}</div>}
+function SummaryBar({results}){const total=results.length,fmtOk=results.filter(r=>r.reference.valid_apa).length,linkOk=results.filter(r=>r.link_reachable===true).length,issues=results.filter(r=>r.errors.length>0).length,clean=results.filter(r=>!r.errors.length&&r.reference.valid_apa).length;const S=({val,label,color})=><div style={{textAlign:'center',padding:'0 20px',borderRight:'1px solid var(--border)'}}><div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:26,fontWeight:700,color:color||'var(--text)',lineHeight:1}}>{val}</div><div style={{fontSize:10,color:'var(--muted)',marginTop:5,textTransform:'uppercase',letterSpacing:'.5px'}}>{label}</div></div>;return<div style={{border:'1px solid var(--border)',borderRadius:8,background:'var(--card)',padding:'18px 0',display:'flex',alignItems:'stretch',justifyContent:'center',marginBottom:24,overflowX:'auto',flexWrap:'wrap',gap:'8px 0'}}><S val={total} label="total"/><S val={`${fmtOk}/${total}`} label="format ok"/><S val={`${linkOk}/${total}`} label="links ok" color="var(--blue)"/><S val={`${clean}/${total}`} label="passing" color="var(--green)"/><S val={issues} label="issues" color={issues>0?'var(--red)':'var(--green)'}/></div>}
+
+function RecommendedSources({sources}){
+  if(!sources||!sources.length)return null;
+  return<div style={{marginTop:8,padding:'10px 14px',background:'var(--cyan-bg)',border:'1px solid #0d3a45',borderRadius:6}}>
+    <div style={{fontSize:10,fontWeight:600,color:'var(--cyan)',marginBottom:8,textTransform:'uppercase',display:'flex',alignItems:'center',gap:6}}>
+      Suggested Alternative Sources <span style={{fontSize:9,color:'var(--muted)',textTransform:'none',fontWeight:400}}>(CrossRef + arXiv, neural re-ranked)</span>
+    </div>
+    <div style={{display:'flex',flexDirection:'column',gap:6}}>
+      {sources.map((s,i)=><div key={i} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'6px 8px',background:'var(--bg)',borderRadius:5}}>
+        <span style={{fontSize:9,color:'var(--muted)',fontFamily:"'JetBrains Mono',monospace",whiteSpace:'nowrap',marginTop:1}}>#{i+1}</span>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:12,color:'var(--text)',lineHeight:1.5}}>{s.title}</div>
+          <div style={{fontSize:10,color:'var(--muted)',marginTop:2}}>{(s.authors||[]).slice(0,3).join(', ')}{s.year?` (${s.year})`:''}</div>
+        </div>
+        <span style={{fontSize:9,color:'var(--cyan)',background:'var(--bg)',border:'1px solid #0d3a45',borderRadius:3,padding:'2px 6px',whiteSpace:'nowrap'}}>{s.source}</span>
+        <span style={{fontSize:10,color:s.neural_score>=0.7?'var(--green)':s.neural_score>=0.4?'var(--yellow)':'var(--muted)',minWidth:34,textAlign:'right'}}>{Math.round((s.neural_score||0)*100)}%</span>
+        {s.url&&<a href={s.url} target="_blank" rel="noreferrer" style={{fontSize:10,color:'var(--blue)'}}>↗</a>}
+      </div>)}
+    </div>
+  </div>;
+}
+
+function ReferenceCard({index,vr,delay,formatLabel}){const status=cardStatus(vr),cfg=STATUS[status],ref=vr.reference;const titleDetail=vr.title_found?`${Math.round((vr.title_score||0)*100)}% match`:(ref.doi?'not verified':undefined);const yearDetail=ref.year?(vr.date_found?`cited ${ref.year} / found ${vr.date_found}`:`cited ${ref.year}`):undefined;return<div className="fade-up" style={{border:'1px solid var(--border)',borderLeft:`3px solid ${cfg.color}`,borderRadius:8,overflow:'hidden',background:'var(--card)',animationDelay:`${delay}s`}}><div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px',borderBottom:'1px solid var(--border)',background:'#0d1020'}}><div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}><span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:'var(--muted)'}}>#{index}</span><span style={{fontSize:10,fontWeight:600,letterSpacing:'.8px',color:cfg.color,background:cfg.bg,padding:'3px 8px',borderRadius:4}}>{cfg.label}</span><span style={{fontSize:10,color:'var(--muted)',background:'var(--border)',padding:'2px 7px',borderRadius:3}}>{formatLabel}</span>{ref.doi_only&&<span className="doi-pill">DOI resolved</span>}{vr.metadata_source&&<span style={{fontSize:9,color:'var(--muted)',fontFamily:"'JetBrains Mono',monospace"}}>via {vr.metadata_source}</span>}</div>{ref.doi&&<a href={`https://doi.org/${ref.doi}`} target="_blank" rel="noreferrer" style={{fontFamily:"'JetBrains Mono',monospace",fontSize:11,opacity:.7}}>DOI ↗</a>}</div><div style={{padding:'14px 16px'}}><div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:'var(--sub)',lineHeight:1.9,padding:'10px 14px',background:'var(--bg)',borderRadius:6,marginBottom:10,borderLeft:'2px solid var(--border-md)',wordBreak:'break-word'}}>{ref.raw}</div>{ref.doi_only&&ref.formatted_citation&&<div style={{marginBottom:12,padding:'10px 14px',background:'var(--blue-bg)',border:'1px solid #0d2340',borderRadius:6}}><div style={{fontSize:10,fontWeight:600,color:'var(--blue)',marginBottom:6,textTransform:'uppercase'}}>Resolved ({formatLabel})</div><div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:'var(--text)',lineHeight:1.8,wordBreak:'break-word'}}>{ref.formatted_citation}</div></div>}{ref.valid_apa&&ref.authors?.length>0&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:'4px 20px',marginBottom:12,padding:'10px 14px',background:'var(--bg)',borderRadius:6,fontSize:12}}><div><span style={{color:'var(--muted)',fontSize:10,textTransform:'uppercase'}}>Authors </span><span style={{color:'var(--sub)'}}>{ref.authors.join(' · ')}</span></div>{ref.year&&<div><span style={{color:'var(--muted)',fontSize:10,textTransform:'uppercase'}}>Year </span><span style={{color:'var(--sub)'}}>{ref.year}</span></div>}{ref.title&&<div style={{gridColumn:'1/-1'}}><span style={{color:'var(--muted)',fontSize:10,textTransform:'uppercase'}}>Title </span><span style={{color:'var(--sub)'}}>{ref.title}</span></div>}</div>}<div style={{marginBottom:(vr.errors.length||vr.warnings.length||vr.similarity_breakdown)?12:0}}><CheckRow label={`${formatLabel} format`} value={ref.valid_apa}/>{!ref.valid_apa&&ref.parse_error&&<div style={{fontSize:12,color:'#b06060',fontStyle:'italic',padding:'4px 0 4px 26px'}}>{ref.parse_error}</div>}{ref.valid_apa&&<><CheckRow label="Link reachable" value={vr.link_reachable} detail={vr.link_status||(ref.url||'no URL / DOI')}/><CheckRow label="Title matches" value={vr.title_match} detail={titleDetail}/><CheckRow label="Authors match" value={vr.authors_match}/><CheckRow label="DOI matches" value={vr.doi_match} detail={ref.doi?undefined:'no DOI'}/><CheckRow label="Year matches" value={vr.date_match} detail={yearDetail}/></>}</div>{ref.valid_apa&&vr.similarity_breakdown&&Object.keys(vr.similarity_breakdown).length>0&&<SimilarityBreakdown breakdown={vr.similarity_breakdown} metadataSource={vr.metadata_source} verifiedMetadata={vr.verified_metadata}/>}{vr.errors.length>0&&<div style={{marginBottom:8,marginTop:8,padding:'10px 14px',background:'var(--red-bg)',border:'1px solid #381010',borderRadius:6}}><div style={{fontSize:10,fontWeight:600,color:'var(--red)',marginBottom:6,textTransform:'uppercase'}}>Issues</div>{vr.errors.map((e,i)=><div key={i} style={{color:'#c87070',fontSize:12,marginTop:i>0?6:0}}>{e}</div>)}</div>}{vr.warnings.length>0&&<div style={{padding:'10px 14px',background:'var(--yellow-bg)',border:'1px solid #352208',borderRadius:6,marginTop:8}}><div style={{fontSize:10,fontWeight:600,color:'var(--yellow)',marginBottom:6,textTransform:'uppercase'}}>Warnings</div>{vr.warnings.map((w,i)=><div key={i} style={{color:'#c8a060',fontSize:12,marginTop:i>0?4:0}}>{w}</div>)}</div>}<RecommendedSources sources={vr.recommended_sources}/></div></div>}
+
+function ThesisMatchCard({m}) {
+  const [showPara, setShowPara] = useState(false);
+  const [showOcc, setShowOcc] = useState(false);
+  const stColor = m.status === 'MATCH' ? 'var(--green)' : m.status === 'MISSING' ? 'var(--red)' : m.status === 'MISMATCH' ? 'var(--yellow)' : 'var(--muted)';
+  const stBg = m.status === 'MATCH' ? 'var(--green-bg)' : m.status === 'MISSING' ? 'var(--red-bg)' : m.status === 'MISMATCH' ? 'var(--yellow-bg)' : 'var(--bg)';
+  const stIcon = m.status === 'MATCH' ? '✔' : m.status === 'MISSING' ? '✘' : '⚠';
+
+  function highlightCite(text) {
+    if (!text || !m.citation_text) return text;
+    const idx = text.indexOf(m.citation_text);
+    if (idx === -1) return text;
+    return <>{text.substring(0, idx)}<span style={{background: '#c9a84c30', color: 'var(--gold)', fontWeight: 600, padding: '1px 3px', borderRadius: 3}}>{m.citation_text}</span>{text.substring(idx + m.citation_text.length)}</>;
+  }
+
+  return <div style={{border: '1px solid var(--border)', borderLeft: `3px solid ${stColor}`, borderRadius: 8, overflow: 'hidden', background: 'var(--card)'}}>
+    <div style={{display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderBottom: '1px solid var(--border)', background: '#0d1020'}}>
+      <span style={{color: stColor, fontWeight: 700, fontSize: 14}}>{stIcon}</span>
+      <span style={{fontSize: 13, fontWeight: 500, flex: 1}}>{m.authors} ({m.year || '—'})</span>
+      <span style={{fontSize: 10, color: stColor, fontWeight: 600, background: stBg, padding: '2px 8px', borderRadius: 4}}>{m.status}</span>
+      {m.occurrence_count > 1 && <span style={{fontSize: 9, color: 'var(--muted)', background: 'var(--bg)', padding: '2px 6px', borderRadius: 3}}>×{m.occurrence_count}</span>}
+    </div>
+    <div style={{padding: '10px 14px'}}>
+      {m.evidence_sentence && <div style={{marginBottom: 8}}>
+        <div style={{fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.8px', marginBottom: 4}}>RRL Evidence</div>
+        <div style={{fontFamily: "'JetBrains Mono',monospace", fontSize: 11, color: 'var(--sub)', lineHeight: 1.8, padding: '8px 12px', background: 'var(--bg)', borderRadius: 6, borderLeft: '2px solid var(--border-md)'}}>
+          "{highlightCite(m.evidence_sentence)}"
+        </div>
+        <div style={{display: 'flex', gap: 8, marginTop: 4}}>
+          <span style={{fontSize: 9, color: 'var(--muted)'}}>Chapter 2</span>
+          {m.evidence_paragraph && m.evidence_paragraph !== m.evidence_sentence && <button onClick={() => setShowPara(!showPara)} style={{background: 'none', border: 'none', color: 'var(--blue)', fontSize: 9, cursor: 'pointer', padding: 0}}>{showPara ? '▼ Hide paragraph' : '▶ View full paragraph'}</button>}
+          {m.occurrence_count > 1 && <button onClick={() => setShowOcc(!showOcc)} style={{background: 'none', border: 'none', color: 'var(--purple)', fontSize: 9, cursor: 'pointer', padding: 0}}>{showOcc ? '▼ Hide occurrences' : `▶ ${m.occurrence_count} occurrences`}</button>}
+        </div>
+        {showPara && m.evidence_paragraph && <div style={{marginTop: 6, padding: '8px 12px', background: 'var(--surface)', borderRadius: 6, fontSize: 11, color: 'var(--muted)', lineHeight: 1.7, fontStyle: 'italic'}}>"{m.evidence_paragraph}"</div>}
+        {showOcc && m.occurrences?.length > 1 && <div style={{marginTop: 6}}>{m.occurrences.map((occ, j) => <div key={j} style={{padding: '4px 12px', background: 'var(--surface)', borderRadius: 4, fontSize: 10, color: 'var(--sub)', marginTop: 4, lineHeight: 1.6}}>#{j+1}: "{occ.sentence?.substring(0, 150)}..."</div>)}</div>}
+      </div>}
+      {m.ref_index && <div style={{padding: '8px 12px', background: 'var(--surface)', borderRadius: 6, marginBottom: 6}}>
+        <div style={{fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.8px', marginBottom: 4}}>Matched Reference #{m.ref_index}</div>
+        <div style={{fontSize: 11, color: 'var(--sub)', lineHeight: 1.6}}>{m.ref_text}</div>
+        <div style={{display: 'flex', gap: 12, marginTop: 6, fontSize: 10}}>
+          <span style={{color: m.author_score >= 0.75 ? 'var(--green)' : 'var(--red)'}}>Author {m.author_score >= 0.75 ? '✔' : '✘'} {Math.round(m.author_score * 100)}%</span>
+          <span style={{color: m.year_match ? 'var(--green)' : 'var(--red)'}}>Year {m.year_match ? '✔' : '✘'}</span>
+          {m.title && <span style={{color: 'var(--muted)'}}>Title: {m.title.substring(0, 40)}...</span>}
+        </div>
+      </div>}
+      {m.entailment && m.entailment.label && m.entailment.label !== 'not_checked' && (() => {
+        const eLabel = m.entailment.label;
+        const eColor = eLabel === 'supported' ? 'var(--green)' : eLabel === 'refuted' ? 'var(--red)' : 'var(--muted)';
+        const eBg    = eLabel === 'supported' ? 'var(--green-bg)' : eLabel === 'refuted' ? 'var(--red-bg)' : 'var(--bg)';
+        return <div style={{display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: eBg, border: `1px solid ${eColor}33`, borderRadius: 6}}>
+          <span style={{fontSize: 9, color: 'var(--purple)', fontWeight: 600, textTransform: 'uppercase'}}>RTE</span>
+          <span style={{fontSize: 11, color: eColor, fontWeight: 600, textTransform: 'capitalize'}}>{eLabel.replace('_', ' ')}</span>
+          {m.entailment.confidence > 0 && <span style={{fontSize: 10, color: 'var(--muted)'}}>{Math.round(m.entailment.confidence * 100)}% confidence</span>}
+          {m.entailment.reason && <span style={{fontSize: 10, color: 'var(--muted)', fontStyle: 'italic'}}>{m.entailment.reason}</span>}
+        </div>;
+      })()}
+      {!m.ref_index && m.status === 'MISSING' && <div style={{fontSize: 11, color: '#c87070', fontStyle: 'italic'}}>{m.details}</div>}
+    </div>
+  </div>;
+}
+
+function PdfUploader({onRefsExtracted, format, onFormatDetected}) {
+  const [dragOver, setDragOver] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const [pdfUrl, setPdfUrl] = useState(null);
+  const [inspected, setInspected] = useState(null);
+  const [statusMsg, setStatusMsg] = useState('');
+  // FIX: Store the actual File object in state so it survives re-renders
+  const [storedFile, setStoredFile] = useState(null);
+  const [thesisReport, setThesisReport] = useState(null);
+  const fileRef = useRef(null);
+
+  const fmtBytes = (b) => b < 1024 ? b+' B' : b < 1048576 ? (b/1024).toFixed(1)+' KB' : (b/1048576).toFixed(1)+' MB';
+
+  const handleFile = async (file, mode) => {
+    if (!file) { setError('No file selected.'); return; }
+    if (!file.name.toLowerCase().endsWith('.pdf')) { setError('Only PDF files are supported.'); return; }
+    // FIX: Store the file in state for later use by the buttons
+    setStoredFile(file);
+    setUploading(true); setError(''); setResult(null); setInspected(null); setStatusMsg('Uploading PDF...');
+    if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+    const blobUrl = URL.createObjectURL(file);
+    setPdfUrl(blobUrl);
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('format', format);
+    try {
+      if (mode === 'inspect') {
+        setStatusMsg('Inspecting PDF...');
+        const res = await fetch(`${BASE}/api/upload/inspect`, {method: 'POST', body: fd});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+        setInspected(data);
+        if (data.detected_format) onFormatDetected?.(data.detected_format);
+        setStatusMsg(`Inspection complete. ${data.page_count} pages detected.`);
+      } else if (mode === 'batch') {
+        setStatusMsg('Extracting + validating references...');
+        const res = await fetch(`${BASE}/api/upload-and-validate`, {method: 'POST', body: fd});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+        setResult(data);
+        if (data.detected_format) onFormatDetected?.(data.detected_format);
+        setStatusMsg(`Done. ${data.total} references validated.`);
+      } else {
+        setStatusMsg('Extracting references...');
+        const res = await fetch(`${BASE}/api/upload`, {method: 'POST', body: fd});
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+        setResult(data);
+        if (data.detected_format) onFormatDetected?.(data.detected_format);
+        setStatusMsg(`Done. ${data.total} references extracted.`);
+      }
+    } catch (e) {
+      setError(e.message);
+      setStatusMsg('');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // FIX: These functions use storedFile from state, not fileRef
+  const doExtract = async () => {
+    if (!storedFile) { setError('No PDF file available. Please upload a file first.'); return; }
+    setUploading(true); setError(''); setStatusMsg('Extracting references from PDF...');
+    const fd = new FormData();
+    fd.append('file', storedFile);
+    fd.append('format', format);
+    try {
+      const res = await fetch(`${BASE}/api/upload`, {method: 'POST', body: fd});
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+      setResult(data);
+      setInspected(null);
+      if (data.detected_format) onFormatDetected?.(data.detected_format);
+      setStatusMsg(`Extraction complete. ${data.total} references found.`);
+      if (data.total === 0) {
+        setStatusMsg('Extraction complete but 0 references found. The PDF may not contain a recognizable References section.');
+      }
+    } catch (e) {
+      setError(`Extract failed: ${e.message}`);
+      setStatusMsg('');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const doBatch = async () => {
+    if (!storedFile) { setError('No PDF file available. Please upload a file first.'); return; }
+    setUploading(true); setError(''); setStatusMsg('Extracting and validating all references...');
+    const fd = new FormData();
+    fd.append('file', storedFile);
+    fd.append('format', format);
+    try {
+      const res = await fetch(`${BASE}/api/upload-and-validate`, {method: 'POST', body: fd});
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+      setResult(data);
+      setInspected(null);
+      if (data.detected_format) onFormatDetected?.(data.detected_format);
+      setStatusMsg(`Validation complete. ${data.total} references processed.`);
+      if (data.total === 0) {
+        setStatusMsg('Validation complete but 0 references found. The PDF may not contain a recognizable References section.');
+      }
+    } catch (e) {
+      setError(`Extract + Validate failed: ${e.message}`);
+      setStatusMsg('');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const doAnalyze = async () => {
+    if (!storedFile) { setError('No PDF file available. Please upload a file first.'); return; }
+    setUploading(true); setError(''); setStatusMsg('Analyzing Chapter 2 citations vs References...');
+    setThesisReport(null);
+    const fd = new FormData();
+    fd.append('file', storedFile);
+    fd.append('format', format);
+    try {
+      const res = await fetch(`${BASE}/api/analyze-thesis`, {method: 'POST', body: fd});
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+      setThesisReport(data.report);
+      setInspected(null);
+      if (data.detected_format) onFormatDetected?.(data.detected_format);
+      const s = data.report?.summary;
+      setStatusMsg(s ? `Analysis complete. ${s.citations_matched}/${s.total_citations_in_ch2} citations matched (${s.integrity_score}%).` : 'Analysis complete.');
+    } catch (e) {
+      setError(`Thesis analysis failed: ${e.message}`);
+      setStatusMsg('');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const clear = () => {
+    setResult(null); setInspected(null); setError(''); setStatusMsg('');
+    setStoredFile(null); setThesisReport(null);
+    if (pdfUrl) URL.revokeObjectURL(pdfUrl);
+    setPdfUrl(null);
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  return <div style={{marginBottom: 16}}>
+    <div style={{fontSize: 10, fontWeight: 600, color: 'var(--gold)', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 10}}>Upload Reference Document</div>
+
+    {/* Upload zone — shown only when no file is loaded */}
+    {!result && !inspected && !uploading && <div className={`upload-zone${dragOver ? ' drag-over' : ''}`}
+      onDragOver={e => {e.preventDefault(); setDragOver(true)}}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={e => {e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer?.files?.[0], 'inspect')}}
+      onClick={() => fileRef.current?.click()}>
+      <input type="file" ref={fileRef} accept=".pdf" onChange={e => handleFile(e.target.files?.[0], 'inspect')} style={{display: 'none'}} />
+      <div style={{fontSize: 28, marginBottom: 8, opacity: 0.5}}>📄</div>
+      <div style={{color: 'var(--sub)', fontSize: 13}}>Drop a PDF here or <span style={{color: 'var(--gold)', textDecoration: 'underline'}}>browse</span></div>
+      <div style={{color: 'var(--muted)', fontSize: 11, marginTop: 4}}>The file will be inspected first so you can verify before processing</div>
+    </div>}
+
+    {/* Loading indicator */}
+    {uploading && <div style={{display: 'flex', alignItems: 'center', gap: 12, padding: 16, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8}}>
+      <div className="spinner" />
+      <div style={{display: 'flex', flexDirection: 'column', gap: 3}}>
+        <span style={{color: 'var(--sub)', fontSize: 13}}>{statusMsg || 'Processing PDF…'}</span>
+        <span style={{color: 'var(--muted)', fontSize: 11}}><LoadingStatus messages={[
+          'Reading PDF pages…',
+          'Detecting the References section…',
+          'Checking CrossRef for each reference…',
+          'Scoring titles with the cross-encoder…',
+          'Cross-checking authors and years…',
+          'Large PDFs can take a minute or two — hang tight…',
+        ]}/></span>
+      </div>
+    </div>}
+
+    {/* Error display */}
+    {error && <div style={{marginTop: 8, padding: '10px 14px', background: 'var(--red-bg)', border: '1px solid #381010', borderRadius: 6}}>
+      <div style={{fontSize: 10, fontWeight: 600, color: 'var(--red)', marginBottom: 4, textTransform: 'uppercase'}}>Error</div>
+      <div style={{color: '#c87070', fontSize: 12}}>{error}</div>
+      <div style={{marginTop: 6}}><button className="btn-ghost" onClick={clear}>Try Again</button></div>
+    </div>}
+
+    {/* Status message */}
+    {statusMsg && !uploading && !error && <div className="status-bar" style={{background: 'var(--surface)', color: 'var(--sub)', border: '1px solid var(--border)'}}>{statusMsg}</div>}
+
+    {/* Inspect result — verify before processing */}
+    {inspected && !result && <div style={{background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden'}}>
+      <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', background: 'var(--card)'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
+          <span style={{fontSize: 18}}>📄</span>
+          <div>
+            <div style={{fontSize: 13, fontWeight: 500}}>{inspected.filename}</div>
+            <div style={{fontSize: 11, color: 'var(--muted)', fontFamily: "'JetBrains Mono',monospace"}}>
+              {inspected.file_size_display || fmtBytes(inspected.file_size)} · {inspected.page_count} page{inspected.page_count !== 1 ? 's' : ''}
+            </div>
+          </div>
+        </div>
+        <button className="btn-ghost" onClick={clear}>✕</button>
+      </div>
+      {inspected.detected_format && <div style={{padding: '8px 14px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 6}}>
+        <span style={{fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '.5px'}}>Detected format:</span>
+        <span style={{fontSize: 11, fontWeight: 600, color: 'var(--gold)', background: 'var(--gold-bg)', padding: '2px 8px', borderRadius: 4}}>{FORMATS[inspected.detected_format]?.label || inspected.detected_format}</span>
+      </div>}
+      {inspected.pdf_metadata && Object.keys(inspected.pdf_metadata).length > 0 && <div style={{padding: '10px 14px', borderBottom: '1px solid var(--border)'}}>
+        <div style={{fontSize: 10, fontWeight: 600, color: 'var(--green)', letterSpacing: '.8px', textTransform: 'uppercase', marginBottom: 6}}>Extracted Metadata</div>
+        <div style={{display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '2px 12px', fontSize: 12}}>
+          {Object.entries(inspected.pdf_metadata).map(([k, v]) => <React.Fragment key={k}>
+            <span style={{color: 'var(--muted)', textTransform: 'capitalize'}}>{k}:</span>
+            <span style={{color: 'var(--sub)', wordBreak: 'break-word'}}>{Array.isArray(v) ? v.join(', ') : typeof v === 'string' && v.length > 200 ? v.substring(0, 200) + '…' : String(v)}</span>
+          </React.Fragment>)}
+        </div>
+      </div>}
+      {pdfUrl && <div style={{height: 250, overflow: 'hidden', borderBottom: '1px solid var(--border)'}}><iframe src={pdfUrl} style={{width: '100%', height: '100%', border: 'none'}} title="Preview" /></div>}
+      <div style={{padding: '10px 14px', display: 'flex', gap: 8, flexWrap: 'wrap'}}>
+        {/* FIX: These buttons now call doExtract/doBatch which use storedFile from state */}
+        <button onClick={doExtract} disabled={uploading}
+          style={{background: 'var(--gold-bg)', border: '1px solid var(--gold)', borderRadius: 6, padding: '7px 16px', color: 'var(--gold)', fontSize: 12, fontWeight: 600, opacity: uploading ? 0.5 : 1}}>
+          Extract References
+        </button>
+        <button onClick={doBatch} disabled={uploading}
+          style={{background: 'var(--green-bg)', border: '1px solid var(--green)', borderRadius: 6, padding: '7px 16px', color: 'var(--green)', fontSize: 12, fontWeight: 600, opacity: uploading ? 0.5 : 1}}>
+          Extract + Validate
+        </button>
+        <button onClick={doAnalyze} disabled={uploading}
+          style={{background: 'var(--purple-bg)', border: '1px solid var(--purple)', borderRadius: 6, padding: '7px 16px', color: 'var(--purple)', fontSize: 12, fontWeight: 600, opacity: uploading ? 0.5 : 1}}>
+          Analyze Ch.2 Integrity
+        </button>
+      </div>
+    </div>}
+
+    {/* Full result — after extract or batch */}
+    {result && <div style={{background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden'}}>
+      <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--border)', background: 'var(--card)'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
+          <span style={{fontSize: 18}}>📄</span>
+          <div>
+            <div style={{fontSize: 13, fontWeight: 500}}>{result.filename}</div>
+            <div style={{fontSize: 11, color: 'var(--muted)', fontFamily: "'JetBrains Mono',monospace"}}>
+              {result.file_size_display || fmtBytes(result.file_size)} · {result.page_count} page{result.page_count !== 1 ? 's' : ''} · {result.total} ref{result.total !== 1 ? 's' : ''}
+            </div>
+          </div>
+        </div>
+        <div style={{display: 'flex', gap: 6}}>
+          {result.references && !result.results && <button className="btn-ghost" onClick={() => onRefsExtracted(result.references)}>Use References ({result.total})</button>}
+          <button className="btn-ghost" onClick={clear}>✕</button>
+        </div>
+      </div>
+      {pdfUrl && <div style={{height: 250, overflow: 'hidden'}}><iframe src={pdfUrl} style={{width: '100%', height: '100%', border: 'none'}} title="Preview" /></div>}
+      {result.warning && <div className="status-bar" style={{background: 'var(--yellow-bg)', color: 'var(--yellow)', border: '1px solid #352208', margin: '8px 14px'}}>{result.warning}</div>}
+    </div>}
+
+    {/* Batch results rendered inline */}
+    {result?.results && <div style={{marginTop: 16}}>
+      <SummaryBar results={result.results} />
+      <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+        {result.results.map((vr, i) => <ReferenceCard key={i} index={i + 1} vr={vr} delay={i * .07} formatLabel={FORMATS[format]?.label || 'APA 7'} />)}
+      </div>
+    </div>}
+
+    {/* Chapter 2 Integrity Report */}
+    {thesisReport && <div style={{marginTop: 16}}>
+      <div style={{fontFamily: "'Cormorant Garamond',serif", fontSize: 20, fontWeight: 700, marginBottom: 12}}>Chapter 2 Citation–Reference Integrity</div>
+      {thesisReport.errors?.length > 0 && <div style={{padding: '10px 14px', background: 'var(--red-bg)', border: '1px solid #381010', borderRadius: 6, marginBottom: 12}}>{thesisReport.errors.map((e,i) => <div key={i} style={{color: '#c87070', fontSize: 12}}>{e}</div>)}</div>}
+      {thesisReport.summary && (() => {
+        const s = thesisReport.summary;
+        const scoreColor = s.integrity_score >= 80 ? 'var(--green)' : s.integrity_score >= 50 ? 'var(--yellow)' : 'var(--red)';
+        return <div style={{border: '1px solid var(--border)', borderRadius: 8, background: 'var(--card)', padding: 18, marginBottom: 16}}>
+          <div style={{display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14, flexWrap: 'wrap'}}>
+            <div style={{textAlign: 'center'}}><div style={{fontFamily: "'Cormorant Garamond',serif", fontSize: 36, fontWeight: 700, color: scoreColor}}>{s.integrity_score}%</div><div style={{fontSize: 10, color: 'var(--muted)', textTransform: 'uppercase'}}>Integrity</div></div>
+            <div style={{flex: 1, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8}}>
+              <div style={{background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, textAlign: 'center'}}><div style={{fontSize: 18, fontWeight: 700}}>{s.total_citations_in_ch2}</div><div style={{fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase'}}>Citations</div></div>
+              <div style={{background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, textAlign: 'center'}}><div style={{fontSize: 18, fontWeight: 700, color: 'var(--green)'}}>{s.citations_matched}</div><div style={{fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase'}}>Matched</div></div>
+              <div style={{background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, textAlign: 'center'}}><div style={{fontSize: 18, fontWeight: 700, color: s.citations_missing_from_refs > 0 ? 'var(--red)' : 'var(--green)'}}>{s.citations_missing_from_refs}</div><div style={{fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase'}}>Missing</div></div>
+              <div style={{background: 'var(--bg)', padding: '8px 12px', borderRadius: 6, textAlign: 'center'}}><div style={{fontSize: 18, fontWeight: 700, color: 'var(--sub)'}}>{s.total_references}</div><div style={{fontSize: 9, color: 'var(--muted)', textTransform: 'uppercase'}}>Total Refs</div></div>
+            </div>
+          </div>
+        </div>;
+      })()}
+      {thesisReport.matches?.length > 0 && <div style={{display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12}}>
+        {thesisReport.matches.map((m, i) => <ThesisMatchCard key={i} m={m} />)}
+      </div>}
+      {thesisReport.uncited_anywhere?.length > 0 && <div style={{padding: '10px 14px', background: 'var(--yellow-bg)', border: '1px solid #352208', borderRadius: 6}}>
+        <div style={{fontSize: 10, fontWeight: 600, color: 'var(--yellow)', marginBottom: 6, textTransform: 'uppercase'}}>References Not Cited Anywhere ({thesisReport.uncited_anywhere.length})</div>
+        {thesisReport.uncited_anywhere.slice(0, 10).map((u, i) => <div key={i} style={{color: '#c8a060', fontSize: 12, marginTop: i > 0 ? 4 : 0}}>⚠ {u.authors?.[0] || '?'} ({u.year}) — {u.title?.substring(0, 60) || 'untitled'}...</div>)}
+        {thesisReport.uncited_anywhere.length > 10 && <div style={{color: 'var(--muted)', fontSize: 11, marginTop: 4}}>...and {thesisReport.uncited_anywhere.length - 10} more</div>}
+      </div>}
+    </div>}
+  </div>;
+}
+
+function App(){const[input,setInput]=useState(''),[format,setFormat]=useState('apa7'),[results,setResults]=useState(null),[loading,setLoading]=useState(false),[error,setError]=useState(''),[showSurveyPopup,setShowSurveyPopup]=useState(true);const resultsRef=useRef(null);const detectedRefs=parseRefs(input,format),refCount=detectedRefs.length,canValidate=!loading&&input.trim().length>0;const validate=async()=>{if(!input.trim())return;setLoading(true);setError('');setResults(null);try{const res=await fetch(`${BASE}/api/validate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({references:detectedRefs,format})});if(!res.ok){const d=await res.json().catch(()=>({}));throw new Error(d.error||`HTTP ${res.status}`)}const data=await res.json();setResults(data.results);setTimeout(()=>resultsRef.current?.scrollIntoView({behavior:'smooth',block:'start'}),100)}catch(e){setError(e.message)}finally{setLoading(false)}};const handlePdfRefs=refs=>{setInput(refs.join('\n\n'));setResults(null);setError('')};const fl=FORMATS[format]?.label||'APA 7';
+return<div style={{minHeight:'100vh',display:'flex',flexDirection:'column'}}><header style={{borderBottom:'1px solid var(--border)',background:'var(--surface)',padding:'0 32px',display:'flex',alignItems:'center',justifyContent:'space-between',height:60,flexShrink:0,position:'sticky',top:0,zIndex:100}}><div style={{display:'flex',alignItems:'center',gap:14}}><div style={{width:34,height:34,borderRadius:8,background:'linear-gradient(135deg,#c9a84c,#7a5820)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16}}>📚</div><div><div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,fontWeight:700,lineHeight:1.2}}>Reference Validator</div><div style={{fontSize:11,color:'var(--muted)'}}>APA 7 · MLA 9 · Chicago 17 · IEEE</div></div></div></header>
+<main style={{flex:1,maxWidth:940,width:'100%',margin:'0 auto',padding:'36px 24px'}}><section style={{marginBottom:24}}><div style={{fontSize:10,fontWeight:600,color:'var(--gold)',letterSpacing:'1px',textTransform:'uppercase',marginBottom:10}}>Citation Format</div><div style={{display:'flex',gap:8,flexWrap:'wrap'}}>{Object.entries(FORMATS).map(([key,cfg])=><button key={key} className={`format-tab${format===key?' active':''}`} onClick={()=>{setFormat(key);setResults(null);setError('')}}>{cfg.label}</button>)}</div></section>
+<PdfUploader onRefsExtracted={handlePdfRefs} format={format} onFormatDetected={setFormat}/>
+<section style={{marginBottom:32}}><div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}><label style={{fontSize:10,fontWeight:600,color:'var(--gold)',letterSpacing:'1px',textTransform:'uppercase'}}>Reference Input <span style={{fontFamily:"'JetBrains Mono',monospace",color:'var(--muted)',fontSize:9,fontWeight:400,textTransform:'none'}}>(unlimited)</span></label>{input&&<button className="btn-ghost" onClick={()=>{setInput('');setResults(null);setError('')}}>Clear</button>}</div><div style={{border:`1px solid ${refCount>0?'var(--border-md)':'var(--border)'}`,borderRadius:8,overflow:'hidden'}}><textarea value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter')validate()}} rows={10} placeholder={FORMATS[format]?.ph||''} style={{width:'100%',display:'block',background:'var(--surface)',color:'var(--text)',fontSize:12,lineHeight:1.9,padding:'14px 16px',border:'none',resize:'vertical'}}/><div style={{background:'var(--surface)',borderTop:'1px solid var(--border)',padding:'8px 14px',display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:8}}><div style={{display:'flex',alignItems:'center',gap:14}}>{refCount>0?<span style={{fontSize:12,color:'var(--sub)',fontWeight:500}}>{refCount} ref{refCount!==1?'s':''} detected</span>:<span style={{fontSize:12,color:'var(--muted)'}}>Separate with blank lines</span>}<span style={{fontSize:10,color:'var(--border-md)',fontFamily:"'JetBrains Mono',monospace"}}>Ctrl+Enter</span></div><button onClick={validate} disabled={!canValidate} style={{background:canValidate?'var(--gold)':'var(--border)',color:canValidate?'#0c0f18':'var(--muted)',border:'none',borderRadius:6,padding:'7px 18px',fontSize:13,fontWeight:600,cursor:canValidate?'pointer':'not-allowed',display:'flex',alignItems:'center',gap:8}}>{loading?<><div className="spinner" style={{width:14,height:14,borderWidth:2}}/>Validating…</>:`Validate ${refCount>0?`(${refCount})`:''}`}</button></div></div>{error&&<div style={{marginTop:10,padding:'12px 14px',background:'var(--red-bg)',border:'1px solid #381010',borderRadius:6}}><div style={{fontSize:10,fontWeight:600,color:'var(--red)',marginBottom:5,textTransform:'uppercase'}}>Error</div><div style={{color:'#c87070',fontSize:12,fontFamily:"'JetBrains Mono',monospace",marginBottom:6}}>{error}</div><div style={{color:'var(--muted)',fontSize:11}}>Backend running? <code>python api_server.py</code></div></div>}</section>
+{loading&&<div style={{display:'flex',flexDirection:'column',alignItems:'center',padding:'60px 0',gap:16}}><div className="spinner"/><div style={{color:'var(--sub)',fontSize:13}}><LoadingStatus messages={[`Checking CrossRef for each reference…`,`Verifying links…`,`Scoring titles with the cross-encoder…`,`Cross-checking authors and years…`,`Validating ${fl} formatting…`,`Almost done — finishing up ${refCount>1?`${refCount} references`:'this reference'}…`]}/></div></div>}
+{results&&!loading&&<section ref={resultsRef} className="fade-up"><div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:18}}><h2 style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,fontWeight:600}}>Validation Results <span style={{fontSize:14,color:'var(--sub)',fontWeight:400,marginLeft:10}}>{fl}</span></h2><button className="btn-ghost" onClick={()=>{setResults(null);setInput('')}}>Clear</button></div><SummaryBar results={results}/><div style={{display:'flex',flexDirection:'column',gap:12}}>{results.map((vr,i)=><ReferenceCard key={i} index={i+1} vr={vr} delay={i*.07} formatLabel={fl}/>)}</div></section>}
+</main>
+<footer style={{borderTop:'1px solid var(--border)',padding:'12px 32px',color:'var(--muted)',fontSize:11,display:'flex',alignItems:'center',justifyContent:'space-between',background:'var(--surface)',flexWrap:'wrap',gap:8}}><span>Reference Validator · APA · MLA · Chicago · IEEE</span><div style={{display:'flex',alignItems:'center',gap:12}}><span style={{fontFamily:"'JetBrains Mono',monospace"}}>v5.0</span><div style={{position:'relative'}}>{showSurveyPopup&&<div style={{position:'absolute',bottom:'calc(100% + 10px)',right:0,width:200,background:'var(--card)',border:'1px solid var(--gold)',borderRadius:8,padding:'10px 12px',boxShadow:'0 4px 16px rgba(0,0,0,.4)',animation:'fadeUp .35s ease both'}}><button onClick={()=>setShowSurveyPopup(false)} style={{position:'absolute',top:4,right:6,background:'none',border:'none',color:'var(--muted)',fontSize:13,cursor:'pointer',padding:2,lineHeight:1}}>✕</button><div style={{fontSize:12,color:'var(--text)',lineHeight:1.5,paddingRight:10}}>Got a second? We'd love your feedback on this tool.</div><div style={{position:'absolute',bottom:-6,right:16,width:12,height:12,background:'var(--card)',borderRight:'1px solid var(--gold)',borderBottom:'1px solid var(--gold)',transform:'rotate(45deg)'}}/></div>}<a href={GOOGLE_FORM_URL} target="_blank" rel="noreferrer" onClick={()=>setShowSurveyPopup(false)} style={{background:'var(--gold-bg)',border:'1px solid var(--gold)',borderRadius:5,padding:'5px 14px',color:'var(--gold)',fontSize:11,fontWeight:600,textDecoration:'none',display:'inline-block'}}>📋 Survey ↗</a></div></div></footer>
+</div>}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

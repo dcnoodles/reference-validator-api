@@ -1,3 +1,4 @@
+import os
 import re
 import sys
 import time
@@ -351,6 +352,52 @@ _model_load_lock = threading.Lock()   # New Rec E: batch validation runs referen
                                         # the same multi-hundred-MB model at once.
 
 
+def _resource_base_dir() -> str:
+    """
+    Resolves the directory this script's bundled resources live in, whether
+    running as a plain .py file or frozen into a standalone executable by
+    PyInstaller (which extracts bundled data files to a temp dir exposed as
+    sys._MEIPASS, not the .py file's own on-disk location).
+    """
+    if hasattr(sys, "_MEIPASS"):
+        return sys._MEIPASS
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+_BUNDLED_MODEL_PATHS = {
+    "cross-encoder/stsb-distilroberta-base": "bundled_models/similarity",
+    "cross-encoder/nli-MiniLM2-L6-H768":     "bundled_models/nli",
+}
+
+
+def _load_cross_encoder(model_name: str, label: str):
+    """
+    Loads a CrossEncoder using the quantized ONNX backend when available —
+    measured directly: both models loaded via raw PyTorch cost ~1041MB RSS,
+    versus ~606MB for the same two models via quantized ONNX (int8,
+    avx512). Falls back to the default torch backend if the ONNX runtime
+    stack (the 'optimum' package) isn't installed or that specific
+    quantized file isn't available for a model, so this degrades
+    gracefully rather than failing outright.
+
+    Prefers a locally bundled copy of the model over the Hugging Face Hub
+    when one is shipped alongside this script — the standalone desktop app
+    build bundles these directly (see bundled_models/) so end users don't
+    need internet access or a first-run download just to launch the app.
+    The web-hosted deployment has no such bundle, so it transparently falls
+    back to downloading from the Hub, same as before.
+    """
+    local_dir = os.path.join(_resource_base_dir(), _BUNDLED_MODEL_PATHS.get(model_name, ""))
+    source = local_dir if os.path.isdir(local_dir) else model_name
+    try:
+        print(f"  Loading {label} ({source}, ONNX backend)… (first use only)")
+        return CrossEncoder(source, backend="onnx",
+                            model_kwargs={"file_name": "onnx/model_qint8_avx512.onnx"})
+    except Exception as e:
+        print(f"  ⚠ ONNX backend unavailable for {label} ({e}) — falling back to PyTorch.")
+        return CrossEncoder(source)
+
+
 def _get_similarity_cross_encoder():
     global _sim_cross_encoder
     if not _NEURAL_AVAILABLE:
@@ -359,8 +406,7 @@ def _get_similarity_cross_encoder():
         with _model_load_lock:
             if _sim_cross_encoder is None:   # re-check: another thread may have just finished
                 try:
-                    print(f"  Loading neural similarity cross-encoder ({CROSS_ENCODER_SIM_MODEL})… (first use only)")
-                    _sim_cross_encoder = CrossEncoder(CROSS_ENCODER_SIM_MODEL)
+                    _sim_cross_encoder = _load_cross_encoder(CROSS_ENCODER_SIM_MODEL, "neural similarity cross-encoder")
                 except Exception as e:
                     print(f"  ⚠ Could not load similarity cross-encoder: {e}")
                     _sim_cross_encoder = False   # sentinel — don't retry on every call
@@ -375,8 +421,7 @@ def _get_nli_cross_encoder():
         with _model_load_lock:
             if _nli_cross_encoder is None:
                 try:
-                    print(f"  Loading neural entailment cross-encoder ({CROSS_ENCODER_NLI_MODEL})… (first use only)")
-                    _nli_cross_encoder = CrossEncoder(CROSS_ENCODER_NLI_MODEL)
+                    _nli_cross_encoder = _load_cross_encoder(CROSS_ENCODER_NLI_MODEL, "neural entailment cross-encoder")
                 except Exception as e:
                     print(f"  ⚠ Could not load NLI cross-encoder: {e}")
                     _nli_cross_encoder = False

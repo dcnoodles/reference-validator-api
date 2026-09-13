@@ -17,8 +17,15 @@ import importlib.util
 import re
 from pathlib import Path
 
+# ── Resolve bundled-resource directory (handles PyInstaller too) ─────────────
+# When frozen into a standalone executable, bundled data files are extracted
+# to a temp dir exposed as sys._MEIPASS, not this .py file's own on-disk
+# location — this must be checked first so the desktop app build can find
+# reference_validator-GUIDE-1.py and app_ui.html correctly.
+_BASE_DIR = Path(sys._MEIPASS) if hasattr(sys, "_MEIPASS") else Path(__file__).parent
+
 # ── Load the validator module (handles the hyphenated filename) ──────────────
-_VALIDATOR_FILE = Path(__file__).parent / "reference_validator-GUIDE-1.py"
+_VALIDATOR_FILE = _BASE_DIR / "reference_validator-GUIDE-1.py"
 
 if not _VALIDATOR_FILE.exists():
     print(f"\n  ✘ Validator script not found: {_VALIDATOR_FILE}")
@@ -59,6 +66,18 @@ import io
 
 app = Flask(__name__)
 CORS(app)
+
+_APP_UI_FILE = _BASE_DIR / "app_ui.html"
+
+
+@app.route("/")
+def serve_app_ui():
+    """
+    Desktop-app mode: Flask serves the UI itself instead of it being hosted
+    separately (e.g. on Cloudflare Pages), so the whole thing is a single
+    local process on one port — no separate web hosting at all.
+    """
+    return send_file(_APP_UI_FILE)
 
 
 # ── Serialisers ──────────────────────────────────────────────────────────────

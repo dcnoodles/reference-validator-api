@@ -1,0 +1,6 @@
+# Additional dependencies for building the standalone desktop app
+# (on top of everything already listed in requirements.txt).
+# Not needed by the web-hosted Render deployment — pywebview requires a
+# display and PyInstaller is a build-time-only tool.
+pywebview
+pyinstaller
