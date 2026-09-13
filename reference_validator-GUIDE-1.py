@@ -2,12 +2,14 @@ import re
 import sys
 import time
 import json
+import threading
 import unicodedata
 import urllib.parse
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
 from difflib import SequenceMatcher
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ── Dependency bootstrap ──────────────────────────────────────────────────────
 def _install(pkg: str, import_as: str | None = None) -> None:
@@ -117,6 +119,8 @@ NEURAL_OVERRIDE_THRESHOLD = 0.75   # neural score needed to rescue a failed titl
 SEMANTIC_SCHOLAR_API        = "https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}"
 SEMANTIC_SCHOLAR_SEARCH_API = "https://api.semanticscholar.org/graph/v1/paper/search"
 ARXIV_API = "http://export.arxiv.org/api/query"
+ARXIV_TIMEOUT = 5   # short on purpose — see arxiv_search() for why
+SEMANTIC_SCHOLAR_TIMEOUT = 6   # same reasoning — observed rate-limiting during testing
 
 YEAR_PATTERN   = re.compile(r"\b(19|20)\d{2}\b")
 
@@ -341,17 +345,25 @@ def _sigmoid(x: float) -> float:
         return 0.0 if x < 0 else 1.0
 
 
+_model_load_lock = threading.Lock()   # New Rec E: batch validation runs references
+                                        # concurrently — without this, two threads
+                                        # racing on first use would both try to load
+                                        # the same multi-hundred-MB model at once.
+
+
 def _get_similarity_cross_encoder():
     global _sim_cross_encoder
     if not _NEURAL_AVAILABLE:
         return None
     if _sim_cross_encoder is None:
-        try:
-            print(f"  Loading neural similarity cross-encoder ({CROSS_ENCODER_SIM_MODEL})… (first use only)")
-            _sim_cross_encoder = CrossEncoder(CROSS_ENCODER_SIM_MODEL)
-        except Exception as e:
-            print(f"  ⚠ Could not load similarity cross-encoder: {e}")
-            _sim_cross_encoder = False   # sentinel — don't retry on every call
+        with _model_load_lock:
+            if _sim_cross_encoder is None:   # re-check: another thread may have just finished
+                try:
+                    print(f"  Loading neural similarity cross-encoder ({CROSS_ENCODER_SIM_MODEL})… (first use only)")
+                    _sim_cross_encoder = CrossEncoder(CROSS_ENCODER_SIM_MODEL)
+                except Exception as e:
+                    print(f"  ⚠ Could not load similarity cross-encoder: {e}")
+                    _sim_cross_encoder = False   # sentinel — don't retry on every call
     return _sim_cross_encoder or None
 
 
@@ -360,12 +372,14 @@ def _get_nli_cross_encoder():
     if not _NEURAL_AVAILABLE:
         return None
     if _nli_cross_encoder is None:
-        try:
-            print(f"  Loading neural entailment cross-encoder ({CROSS_ENCODER_NLI_MODEL})… (first use only)")
-            _nli_cross_encoder = CrossEncoder(CROSS_ENCODER_NLI_MODEL)
-        except Exception as e:
-            print(f"  ⚠ Could not load NLI cross-encoder: {e}")
-            _nli_cross_encoder = False
+        with _model_load_lock:
+            if _nli_cross_encoder is None:
+                try:
+                    print(f"  Loading neural entailment cross-encoder ({CROSS_ENCODER_NLI_MODEL})… (first use only)")
+                    _nli_cross_encoder = CrossEncoder(CROSS_ENCODER_NLI_MODEL)
+                except Exception as e:
+                    print(f"  ⚠ Could not load NLI cross-encoder: {e}")
+                    _nli_cross_encoder = False
     return _nli_cross_encoder or None
 
 
@@ -644,18 +658,20 @@ def extract_doi(text: str) -> str:
     return ""
 
 
-_last_request_error: str = ""   # New Rec A: stores the last request error for diagnostics
+# New Rec E: thread-local (not a plain module global) so concurrent
+# validate_reference() calls — added to parallelize batch validation —
+# cannot clobber each other's diagnostic error strings mid-request.
+_tls = threading.local()
 
 def safe_get(url: str, *, allow_redirects: bool = True) -> Optional[requests.Response]:
     """
     Performs an HTTP GET with error capture.
-    New Rec A: sets _last_request_error with the specific failure reason
-    so downstream code can report what went wrong instead of a generic message.
+    New Rec A: sets _tls.request_error with the specific failure reason so
+    downstream code can report what went wrong instead of a generic message.
     """
-    global _last_request_error
-    _last_request_error = ""
+    _tls.request_error = ""
     if not url:
-        _last_request_error = "No URL provided"
+        _tls.request_error = "No URL provided"
         return None
     try:
         r = requests.get(url, headers=HEADERS, timeout=TIMEOUT,
@@ -666,19 +682,19 @@ def safe_get(url: str, *, allow_redirects: bool = True) -> Optional[requests.Res
             return requests.get(url, headers=HEADERS, timeout=TIMEOUT,
                                 allow_redirects=allow_redirects, verify=False)
         except Exception as e2:
-            _last_request_error = f"SSL error: {str(e2)[:100]}"
+            _tls.request_error = f"SSL error: {str(e2)[:100]}"
             return None
     except requests.exceptions.ConnectionError:
-        _last_request_error = "Connection refused or DNS resolution failed"
+        _tls.request_error = "Connection refused or DNS resolution failed"
         return None
     except requests.exceptions.Timeout:
-        _last_request_error = f"Request timed out after {TIMEOUT}s"
+        _tls.request_error = f"Request timed out after {TIMEOUT}s"
         return None
     except requests.exceptions.TooManyRedirects:
-        _last_request_error = "Too many redirects (possible redirect loop)"
+        _tls.request_error = "Too many redirects (possible redirect loop)"
         return None
     except Exception as e:
-        _last_request_error = f"Request failed: {type(e).__name__}: {str(e)[:100]}"
+        _tls.request_error = f"Request failed: {type(e).__name__}: {str(e)[:100]}"
         return None
 
 
@@ -1996,28 +2012,25 @@ def parse_reference(raw: str, fmt: str = FORMAT_APA7) -> ParsedReference:
 
 
 # ── CrossRef Lookup ───────────────────────────────────────────────────────────
-_last_crossref_error: str = ""   # New Rec A: diagnostics
-
 def crossref_lookup(doi: str) -> dict:
-    global _last_crossref_error
-    _last_crossref_error = ""
+    _tls.crossref_error = ""
     url = CROSSREF_API.format(doi=urllib.parse.quote(doi, safe="/"))
     r = safe_get(url)
     if r is None:
-        _last_crossref_error = f"CrossRef unreachable: {_last_request_error}"
+        _tls.crossref_error = f"CrossRef unreachable: {getattr(_tls, 'request_error', '')}"
         return {}
     if r.status_code == 200:
         try:
             return r.json().get("message", {})
         except Exception as e:
-            _last_crossref_error = f"CrossRef returned invalid JSON: {str(e)[:80]}"
+            _tls.crossref_error = f"CrossRef returned invalid JSON: {str(e)[:80]}"
             return {}
     elif r.status_code == 404:
-        _last_crossref_error = f"DOI not found in CrossRef (HTTP 404)"
+        _tls.crossref_error = f"DOI not found in CrossRef (HTTP 404)"
     elif r.status_code == 429:
-        _last_crossref_error = f"CrossRef rate limit exceeded (HTTP 429) — try again later"
+        _tls.crossref_error = f"CrossRef rate limit exceeded (HTTP 429) — try again later"
     else:
-        _last_crossref_error = f"CrossRef returned HTTP {r.status_code}"
+        _tls.crossref_error = f"CrossRef returned HTTP {r.status_code}"
     return {}
 
 
@@ -2158,17 +2171,17 @@ def crossref_search_by_metadata(title: str,
             headers=HEADERS, timeout=TIMEOUT,
         )
         if r.status_code != 200:
-            _last_crossref_error = f"CrossRef title search returned HTTP {r.status_code}"
+            _tls.crossref_error = f"CrossRef title search returned HTTP {r.status_code}"
             return {}
         items = r.json().get("message", {}).get("items", [])
     except requests.exceptions.Timeout:
-        _last_crossref_error = f"CrossRef title search timed out after {TIMEOUT}s"
+        _tls.crossref_error = f"CrossRef title search timed out after {TIMEOUT}s"
         return {}
     except requests.exceptions.ConnectionError:
-        _last_crossref_error = "CrossRef title search: connection refused or DNS failure"
+        _tls.crossref_error = "CrossRef title search: connection refused or DNS failure"
         return {}
     except Exception as e:
-        _last_crossref_error = f"CrossRef title search failed: {type(e).__name__}"
+        _tls.crossref_error = f"CrossRef title search failed: {type(e).__name__}"
         return {}
 
     if not items:
@@ -2277,13 +2290,20 @@ def arxiv_search(title: str, max_results: int = 10) -> list[dict]:
     Search arXiv's free public Atom API for candidate papers matching a title.
     Returns candidates in the same shape as the CrossRef candidate list so
     both sources can be pooled and re-ranked together.
+
+    Bug fix: uses ARXIV_TIMEOUT (short) instead of the general TIMEOUT —
+    arXiv's public API was directly observed to rate-limit and hang far
+    more than CrossRef during testing, and this is only a "nice to have"
+    recommendation lookup, not a core verification step. Letting one slow
+    arXiv call eat the full 15s TIMEOUT per reference was a major
+    contributor to multi-minute PDF batch hangs.
     """
     if not title or len(title.strip()) < 5:
         return []
     query = urllib.parse.quote(f'ti:"{title}"')
     url = f"{ARXIV_API}?search_query={query}&start=0&max_results={max_results}"
     try:
-        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
+        r = requests.get(url, headers=HEADERS, timeout=ARXIV_TIMEOUT)
         if r.status_code != 200:
             return []
         root = ET.fromstring(r.content)
@@ -2328,7 +2348,7 @@ def fetch_semantic_scholar_abstract(doi: str = "", title: str = "") -> str:
             r = requests.get(
                 SEMANTIC_SCHOLAR_API.format(doi=doi),
                 params={"fields": "abstract,title"},
-                headers=HEADERS, timeout=TIMEOUT,
+                headers=HEADERS, timeout=SEMANTIC_SCHOLAR_TIMEOUT,
             )
             if r.status_code == 200:
                 data = r.json()
@@ -2338,7 +2358,7 @@ def fetch_semantic_scholar_abstract(doi: str = "", title: str = "") -> str:
             r = requests.get(
                 SEMANTIC_SCHOLAR_SEARCH_API,
                 params={"query": title, "fields": "abstract,title", "limit": 1},
-                headers=HEADERS, timeout=TIMEOUT,
+                headers=HEADERS, timeout=SEMANTIC_SCHOLAR_TIMEOUT,
             )
             if r.status_code == 200:
                 papers = r.json().get("data", [])
@@ -2397,22 +2417,37 @@ def recommend_alternative_sources(ref: "ParsedReference", max_candidates: int = 
     if not ref.title or len(ref.title.strip()) < 5:
         return []
 
+    # Bug fix: these two independent external lookups used to run one after
+    # the other (up to TIMEOUT seconds each) — worst case ~2x TIMEOUT for a
+    # single reference's recommendation step alone. Running them
+    # concurrently caps this step at whichever one is slower, not both
+    # combined. Contributed directly to multi-minute hangs on real PDFs
+    # with many unverifiable references, each paying this cost.
     pool: list[dict] = []
+    with ThreadPoolExecutor(max_workers=2) as pool_executor:
+        cr_future  = pool_executor.submit(crossref_search_by_metadata, ref.title, ref.authors,
+                                          ref.year, max_results=max_candidates, min_score=0.0)
+        arx_future = pool_executor.submit(arxiv_search, ref.title, max_results=max_candidates)
 
-    cr = crossref_search_by_metadata(ref.title, ref.authors, ref.year,
-                                     max_results=max_candidates, min_score=0.0)
-    if cr:
-        for c in cr.get("_search_candidates", [])[:max_candidates]:
-            pool.append({
-                "title":   c.get("title", ""),
-                "authors": c.get("authors", []),
-                "year":    c.get("year", ""),
-                "doi":     c.get("doi", ""),
-                "url":     f"https://doi.org/{c['doi']}" if c.get("doi") else "",
-                "source":  "CrossRef",
-            })
+        try:
+            cr = cr_future.result()
+        except Exception:
+            cr = {}
+        if cr:
+            for c in cr.get("_search_candidates", [])[:max_candidates]:
+                pool.append({
+                    "title":   c.get("title", ""),
+                    "authors": c.get("authors", []),
+                    "year":    c.get("year", ""),
+                    "doi":     c.get("doi", ""),
+                    "url":     f"https://doi.org/{c['doi']}" if c.get("doi") else "",
+                    "source":  "CrossRef",
+                })
 
-    pool.extend(arxiv_search(ref.title, max_results=max_candidates))
+        try:
+            pool.extend(arx_future.result())
+        except Exception:
+            pass
 
     if not pool:
         return []
@@ -2576,7 +2611,7 @@ def validate_reference(ref: ParsedReference) -> ValidationResult:
     elif r is None:
         result.link_reachable = False
         # New Rec A: use the specific error captured by safe_get
-        detail = _last_request_error or "Connection error / timeout"
+        detail = getattr(_tls, 'request_error', '') or "Connection error / timeout"
         result.link_status = detail
         result.errors.append(f"Link unreachable ({detail}): {target_url}")
     elif r.status_code == 200:
@@ -2668,12 +2703,12 @@ def validate_reference(ref: ParsedReference) -> ValidationResult:
     if not meta:
         # New Rec A: provide specific diagnostic instead of a generic message
         _diag_parts = []
-        if ref.doi and _last_crossref_error:
-            _diag_parts.append(f"DOI lookup: {_last_crossref_error}")
-        if ref.title and not ref.doi and _last_crossref_error:
-            _diag_parts.append(f"Title search: {_last_crossref_error}")
-        if target_url and _last_request_error:
-            _diag_parts.append(f"Web scraping: {_last_request_error}")
+        if ref.doi and getattr(_tls, 'crossref_error', ''):
+            _diag_parts.append(f"DOI lookup: {getattr(_tls, 'crossref_error', '')}")
+        if ref.title and not ref.doi and getattr(_tls, 'crossref_error', ''):
+            _diag_parts.append(f"Title search: {getattr(_tls, 'crossref_error', '')}")
+        if target_url and getattr(_tls, 'request_error', ''):
+            _diag_parts.append(f"Web scraping: {getattr(_tls, 'request_error', '')}")
 
         if _diag_parts:
             result.warnings.append(
@@ -4032,6 +4067,34 @@ def split_text_into_references(text: str, fmt: str = "") -> list[str]:
         refs.append(joined)
 
     return refs
+
+
+def detect_citation_format(text: str) -> str:
+    """
+    Auto-detects which of the four supported citation styles a document's
+    reference list most likely uses, so a PDF upload doesn't require the
+    user to correctly guess and pre-select the format themselves.
+
+    Reference-boundary detection in split_text_into_references() doesn't
+    actually depend much on which format is assumed — its line-start
+    patterns check for all four formats' shapes regardless of the fmt
+    argument — so this splits once, then tries parsing every resulting
+    entry against each format's own parser and picks whichever format the
+    most entries validate against. No new heuristics: just reuses the
+    parsers that already exist for each format.
+    """
+    sample_refs = split_text_into_references(text, FORMAT_APA7)
+    if not sample_refs:
+        return FORMAT_APA7   # nothing to go on — keep the existing default
+
+    scores = {fmt: 0 for fmt in SUPPORTED_FORMATS}
+    for raw in sample_refs:
+        for fmt in SUPPORTED_FORMATS:
+            if parse_reference(raw, fmt).valid_apa:
+                scores[fmt] += 1
+
+    best_fmt = max(scores, key=scores.get)
+    return best_fmt if scores[best_fmt] > 0 else FORMAT_APA7
 
 
 def collect_references_from_file(path: str, fmt: str = FORMAT_APA7) -> tuple[list[str], str]:

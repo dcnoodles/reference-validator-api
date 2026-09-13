@@ -35,6 +35,7 @@ print("Validator ready.\n")
 parse_reference          = _mod.parse_reference
 validate_reference       = _mod.validate_reference
 split_text_into_references = _mod.split_text_into_references
+detect_citation_format   = _mod.detect_citation_format      # New Rec E: auto-detect on PDF upload
 analyze_thesis_integrity = _mod.analyze_thesis_integrity    # Ch2 integrity checker
 SUPPORTED_FORMATS        = _mod.SUPPORTED_FORMATS
 FORMAT_APA7              = _mod.FORMAT_APA7
@@ -101,6 +102,28 @@ def result_to_dict(vr) -> dict:
     }
 
 
+# ── New Rec E: Concurrent batch validation ────────────────────────────────────
+# Each validate_reference() call is dominated by network waits (CrossRef,
+# arXiv, Semantic Scholar) with some CPU-bound cross-encoder scoring mixed
+# in — running a batch sequentially means a 20-reference list pays for
+# 20 round trips back to back. A thread pool lets those network waits
+# overlap. reference_validator-GUIDE-1.py's diagnostic globals were
+# converted to thread-local storage (_tls) and the cross-encoder lazy-load
+# guarded with a lock specifically to make this safe.
+from concurrent.futures import ThreadPoolExecutor
+
+_BATCH_WORKERS = 6
+
+
+def _validate_batch(raw_refs: list, fmt: str) -> list:
+    def _one(raw):
+        ref = parse_reference(str(raw).strip(), fmt)
+        return result_to_dict(validate_reference(ref))
+
+    with ThreadPoolExecutor(max_workers=min(_BATCH_WORKERS, len(raw_refs)) or 1) as pool:
+        return list(pool.map(_one, raw_refs))
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 @app.route("/api/validate", methods=["POST"])
 def validate_endpoint():
@@ -134,11 +157,7 @@ def validate_endpoint():
                      f"Supported formats: {', '.join(SUPPORTED_FORMATS)}"
         }), 400
 
-    results = []
-    for raw in raw_refs:
-        ref    = parse_reference(str(raw).strip(), fmt)
-        result = validate_reference(ref)
-        results.append(result_to_dict(result))
+    results = _validate_batch(raw_refs, fmt)
 
     # ── Rec 5: Pagination ─────────────────────────────────────────────────────
     total = len(results)
@@ -420,6 +439,7 @@ def upload_inspect_endpoint():
             }), 400
 
         pdf_metadata = _extract_pdf_metadata(pdf_bytes, full_text)
+        detected_format = detect_citation_format(full_text)   # New Rec E
 
         upload_id = _store_upload(pdf_bytes, filename, file_size, page_count, pdf_metadata)
 
@@ -431,6 +451,7 @@ def upload_inspect_endpoint():
             "page_count":       page_count,
             "preview_url":      f"/api/upload/preview/{upload_id}",
             "pdf_metadata":     pdf_metadata,
+            "detected_format":  detected_format,
             "status":           "ready",
             "next_steps": {
                 "extract_refs":   "POST /api/upload with same file to extract references",
@@ -467,9 +488,6 @@ def upload_endpoint():
         return err
     pdf_bytes, filename = validated
     file_size = len(pdf_bytes)
-    fmt = request.form.get("format", FORMAT_APA7).strip().lower()
-    if fmt not in SUPPORTED_FORMATS:
-        fmt = FORMAT_APA7
 
     try:
         # Stage 1: Text extraction
@@ -482,6 +500,11 @@ def upload_endpoint():
                 "stage": "text_extraction",
                 "filename": filename,
             }), 400
+
+        # New Rec E: auto-detect citation format from the PDF's own content
+        # rather than requiring the user to correctly pre-select it.
+        detected_format = detect_citation_format(full_text)
+        fmt = detected_format
 
         # Stage 2: Reference detection + splitting
         refs = split_text_into_references(full_text, fmt)
@@ -502,6 +525,8 @@ def upload_endpoint():
             "total":            len(refs),
             "raw_preview":      full_text[:5000],
             "pdf_metadata":     pdf_metadata,
+            "format":           fmt,
+            "detected_format":  detected_format,
             "extraction_info": {
                 "text_length":    len(full_text),
                 "pages_with_text": sum(1 for p in __import__('pypdf').PdfReader(io.BytesIO(pdf_bytes)).pages if p.extract_text()),
@@ -586,13 +611,6 @@ def upload_and_validate_endpoint():
     pdf_bytes, filename = validated
     file_size = len(pdf_bytes)
 
-    fmt = request.form.get("format", FORMAT_APA7).strip().lower()
-    if fmt not in SUPPORTED_FORMATS:
-        return jsonify({
-            "error": f"Unknown format '{fmt}'. "
-                     f"Supported: {', '.join(SUPPORTED_FORMATS)}"
-        }), 400
-
     try:
         full_text, page_count = _extract_text_from_pdf(pdf_bytes)
 
@@ -601,6 +619,11 @@ def upload_and_validate_endpoint():
                 "error": "Could not extract text from the PDF. "
                          "The file may be scanned/image-based (OCR is not supported)."
             }), 400
+
+        # New Rec E: auto-detect citation format from the PDF's own content
+        # rather than requiring the user to correctly pre-select it.
+        detected_format = detect_citation_format(full_text)
+        fmt = detected_format
 
         refs = split_text_into_references(full_text, fmt)
 
@@ -612,11 +635,7 @@ def upload_and_validate_endpoint():
 
         pdf_metadata = _extract_pdf_metadata(pdf_bytes, full_text)
 
-        results = []
-        for raw in refs:
-            ref    = parse_reference(str(raw).strip(), fmt)
-            result = validate_reference(ref)
-            results.append(result_to_dict(result))
+        results = _validate_batch(refs, fmt)
 
         upload_id = _store_upload(pdf_bytes, filename, file_size, page_count, pdf_metadata)
 
@@ -628,6 +647,7 @@ def upload_and_validate_endpoint():
             "page_count":       page_count,
             "preview_url":      f"/api/upload/preview/{upload_id}",
             "format":           fmt,
+            "detected_format":  detected_format,
             "pdf_metadata":     pdf_metadata,
             "results":          results,
             "total":            len(results),
@@ -654,9 +674,6 @@ def analyze_thesis_endpoint():
         return err
     pdf_bytes, filename = validated
     file_size = len(pdf_bytes)
-    fmt = request.form.get("format", FORMAT_APA7).strip().lower()
-    if fmt not in SUPPORTED_FORMATS:
-        fmt = FORMAT_APA7
 
     try:
         full_text, page_count = _extract_text_from_pdf(pdf_bytes)
@@ -665,6 +682,11 @@ def analyze_thesis_endpoint():
                 "error": "Could not extract text from the PDF.",
                 "stage": "text_extraction",
             }), 400
+
+        # New Rec E: auto-detect citation format from the PDF's own content
+        # rather than requiring the user to correctly pre-select it.
+        detected_format = detect_citation_format(full_text)
+        fmt = detected_format
 
         report = analyze_thesis_integrity(full_text, fmt)
 
@@ -678,6 +700,7 @@ def analyze_thesis_endpoint():
             "preview_url":      f"/api/upload/preview/{upload_id}",
             "upload_id":        upload_id,
             "format":           fmt,
+            "detected_format":  detected_format,
             "report":           report,
         })
 
